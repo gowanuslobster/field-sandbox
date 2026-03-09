@@ -32,9 +32,9 @@ const MIN_ZOOM = 0.1;
 const MAX_ZOOM = 6.5;
 
 const INITIAL_CHARGES: Charge[] = [
-  { id: "q1", position: { x: -0.72, y: 0 }, value: 1.15 },
-  { id: "q2", position: { x: 0.72, y: 0 }, value: -1.15 },
-  { id: "q3", position: { x: 0, y: 0.62 }, value: 0.55 },
+  { id: "q1", position: { x: -0.72, y: 0 }, value: 1 },
+  { id: "q2", position: { x: 0.72, y: 0 }, value: -1 },
+  { id: "q3", position: { x: 0, y: 0.62 }, value: 1 },
 ];
 
 function nextChargeId(): string {
@@ -150,6 +150,10 @@ export function ElectricFieldSandbox() {
   const viewBounds = useMemo(
     () => getViewBounds(baseBounds, { zoom, offsetX, offsetY }),
     [baseBounds, zoom, offsetX, offsetY],
+  );
+  const selectedCharge = useMemo(
+    () => charges.find((charge) => charge.id === selectedChargeId) ?? null,
+    [charges, selectedChargeId],
   );
 
   useEffect(() => {
@@ -474,6 +478,36 @@ export function ElectricFieldSandbox() {
             Remove Selected
           </button>
         </div>
+        {selectedCharge ? (
+          <div className="mt-3 rounded-lg border border-cyan-200/20 bg-cyan-950/25 px-3 py-2">
+            <div className="flex items-center justify-between text-xs text-cyan-100">
+              <span>Selected charge magnitude</span>
+              <span className="font-semibold">
+                {selectedCharge.value > 0 ? "+" : ""}
+                {selectedCharge.value.toFixed(1)}q
+              </span>
+            </div>
+            <input
+              type="range"
+              min={-5}
+              max={5}
+              step={0.5}
+              value={selectedCharge.value}
+              onChange={(event) => {
+                const nextValue = Number.parseFloat(event.currentTarget.value);
+                setCharges((current) =>
+                  current.map((charge) =>
+                    charge.id === selectedCharge.id
+                      ? { ...charge, value: nextValue }
+                      : charge,
+                  ),
+                );
+              }}
+              className="mt-2 w-full accent-cyan-300"
+              aria-label="Selected charge magnitude slider"
+            />
+          </div>
+        ) : null}
         <div className="mt-2 grid grid-cols-3 gap-2">
           <button
             type="button"
