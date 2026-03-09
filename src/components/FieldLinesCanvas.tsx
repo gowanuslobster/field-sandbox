@@ -1,16 +1,19 @@
 "use client";
 
 import { useEffect, useMemo, useRef } from "react";
-import { potentialAtPoint } from "@/physics/electrostatics";
+import { electricFieldAtPoint, potentialAtPoint } from "@/physics/electrostatics";
 import { buildFieldLines } from "@/physics/streamlines";
 import type { Charge, WorldBounds } from "@/physics/types";
 import type { Vector2Like } from "@/physics/vector2d";
 import { worldToScreen } from "@/physics/world-space";
 
+export type FieldLineRenderMode = "animated_dashes" | "static_arrows";
+
 type FieldLinesCanvasProps = {
   charges: Charge[];
   bounds: WorldBounds;
   useGradient?: boolean;
+  mode?: FieldLineRenderMode;
   className?: string;
 };
 
@@ -65,10 +68,95 @@ function drawPolyline(
   context.stroke();
 }
 
+function drawDirectionArrows(
+  context: CanvasRenderingContext2D,
+  points: Vector2Like[],
+  charges: Charge[],
+  bounds: WorldBounds,
+  width: number,
+  height: number,
+): void {
+  if (points.length < 2) {
+    return;
+  }
+
+  const spacingPx = 155;
+  const maxArrowsPerLine = 3;
+  let arrowsPlaced = 0;
+  let distanceSinceArrow = spacingPx * 0.5;
+
+  for (let index = 0; index < points.length - 1; index += 1) {
+    const a = points[index];
+    const b = points[index + 1];
+    const aScreen = worldToScreen(a, bounds, width, height);
+    const bScreen = worldToScreen(b, bounds, width, height);
+    const segmentDx = bScreen.x - aScreen.x;
+    const segmentDy = bScreen.y - aScreen.y;
+    const segmentLength = Math.hypot(segmentDx, segmentDy);
+    if (segmentLength < 1e-4) {
+      continue;
+    }
+
+    let segmentProgress = 0;
+    while (
+      distanceSinceArrow + (segmentLength - segmentProgress) >= spacingPx &&
+      arrowsPlaced < maxArrowsPerLine
+    ) {
+      const remainingToArrow = spacingPx - distanceSinceArrow;
+      const t = (segmentProgress + remainingToArrow) / segmentLength;
+      if (t >= 0 && t <= 1) {
+        const worldPoint = {
+          x: a.x + (b.x - a.x) * t,
+          y: a.y + (b.y - a.y) * t,
+        };
+        const screenPoint = {
+          x: aScreen.x + segmentDx * t,
+          y: aScreen.y + segmentDy * t,
+        };
+        const field = electricFieldAtPoint(worldPoint, charges);
+        const direction = field.normalized();
+        const dirX = direction.x;
+        const dirY = -direction.y;
+        const arrowLength = 9;
+        const headLength = 4.5;
+        const angle = Math.atan2(dirY, dirX);
+        const tipX = screenPoint.x + dirX * arrowLength * 0.5;
+        const tipY = screenPoint.y + dirY * arrowLength * 0.5;
+        const tailX = screenPoint.x - dirX * arrowLength * 0.5;
+        const tailY = screenPoint.y - dirY * arrowLength * 0.5;
+
+        context.beginPath();
+        context.moveTo(tailX, tailY);
+        context.lineTo(tipX, tipY);
+        context.moveTo(tipX, tipY);
+        context.lineTo(
+          tipX - headLength * Math.cos(angle - 0.58),
+          tipY - headLength * Math.sin(angle - 0.58),
+        );
+        context.moveTo(tipX, tipY);
+        context.lineTo(
+          tipX - headLength * Math.cos(angle + 0.58),
+          tipY - headLength * Math.sin(angle + 0.58),
+        );
+        context.stroke();
+        arrowsPlaced += 1;
+      }
+      segmentProgress += remainingToArrow;
+      distanceSinceArrow = 0;
+    }
+
+    distanceSinceArrow += segmentLength - segmentProgress;
+    if (arrowsPlaced >= maxArrowsPerLine) {
+      break;
+    }
+  }
+}
+
 export function FieldLinesCanvas({
   charges,
   bounds,
   useGradient = false,
+  mode = "animated_dashes",
   className,
 }: FieldLinesCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -85,6 +173,7 @@ export function FieldLinesCanvas({
     let animationFrame = 0;
     let dashOffset = 0;
     let previous = performance.now();
+    let drawFrame: (time: number) => void = () => {};
     const resizeObserver = new ResizeObserver((entries) => {
       const entry = entries[0];
       if (!entry) {
@@ -97,19 +186,24 @@ export function FieldLinesCanvas({
       canvas.height = Math.floor(height * dpr);
       canvas.style.width = `${width}px`;
       canvas.style.height = `${height}px`;
+      if (mode === "static_arrows") {
+        drawFrame(performance.now());
+      }
     });
 
     resizeObserver.observe(canvas);
 
-    const render = (time: number) => {
+    drawFrame = (time: number) => {
       const context = canvas.getContext("2d");
       if (!context) {
         return;
       }
 
-      const dt = Math.max(0.001, (time - previous) / 1000);
-      previous = time;
-      dashOffset -= dt * 90;
+      if (mode === "animated_dashes") {
+        const dt = Math.max(0.001, (time - previous) / 1000);
+        previous = time;
+        dashOffset -= dt * 90;
+      }
 
       const dpr = window.devicePixelRatio || 1;
       const width = canvas.width / dpr;
@@ -120,8 +214,12 @@ export function FieldLinesCanvas({
       context.clearRect(0, 0, width, height);
 
       context.lineWidth = 1.2;
-      context.setLineDash([12, 11]);
-      context.lineDashOffset = dashOffset;
+      if (mode === "animated_dashes") {
+        context.setLineDash([12, 11]);
+        context.lineDashOffset = dashOffset;
+      } else {
+        context.setLineDash([]);
+      }
       context.shadowColor = useGradient
         ? "rgba(188, 142, 255, 0.45)"
         : "rgba(112, 214, 255, 0.35)";
@@ -129,18 +227,27 @@ export function FieldLinesCanvas({
 
       for (const line of lines) {
         drawPolyline(context, line, charges, bounds, width, height, useGradient);
+        if (mode === "static_arrows") {
+          drawDirectionArrows(context, line, charges, bounds, width, height);
+        }
       }
 
       context.restore();
-      animationFrame = window.requestAnimationFrame(render);
+      if (mode === "animated_dashes") {
+        animationFrame = window.requestAnimationFrame(drawFrame);
+      }
     };
 
-    animationFrame = window.requestAnimationFrame(render);
+    if (mode === "animated_dashes") {
+      animationFrame = window.requestAnimationFrame(drawFrame);
+    } else {
+      drawFrame(performance.now());
+    }
     return () => {
       window.cancelAnimationFrame(animationFrame);
       resizeObserver.disconnect();
     };
-  }, [bounds, charges, lines, useGradient]);
+  }, [bounds, charges, lines, mode, useGradient]);
 
   return <canvas ref={canvasRef} className={`${className ?? ""} block h-full w-full`} />;
 }

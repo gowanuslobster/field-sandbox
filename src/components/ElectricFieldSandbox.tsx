@@ -9,7 +9,10 @@ import {
   useState,
 } from "react";
 import { FieldHeatmap } from "@/components/FieldHeatmap";
-import { FieldLinesCanvas } from "@/components/FieldLinesCanvas";
+import {
+  FieldLinesCanvas,
+  type FieldLineRenderMode,
+} from "@/components/FieldLinesCanvas";
 import { EquipotentialLinesCanvas } from "@/components/EquipotentialLinesCanvas";
 import { VectorFieldCanvas } from "@/components/VectorFieldCanvas";
 import { potentialAtPoint } from "@/physics/electrostatics";
@@ -62,6 +65,8 @@ export function ElectricFieldSandbox() {
   const [showVectorGrid, setShowVectorGrid] = useState(true);
   const [showFieldLineGradient, setShowFieldLineGradient] = useState(false);
   const [showEquipotentialLines, setShowEquipotentialLines] = useState(false);
+  const [fieldLineMode, setFieldLineMode] =
+    useState<FieldLineRenderMode>("animated_dashes");
 
   useEffect(() => {
     const element = containerRef.current;
@@ -258,6 +263,26 @@ export function ElectricFieldSandbox() {
         <div className="mt-2 space-y-2">
           <button
             type="button"
+            onClick={() =>
+              setFieldLineMode((current) =>
+                current === "animated_dashes" ? "static_arrows" : "animated_dashes",
+              )
+            }
+            className={`flex w-full items-center justify-between rounded-md px-3 py-2 text-sm transition-all duration-200 ${
+              fieldLineMode === "animated_dashes"
+                ? "bg-violet-300/85 text-black shadow-[0_0_14px_rgba(196,181,253,0.45)]"
+                : "bg-violet-400/20 text-violet-100 hover:bg-violet-400/35"
+            }`}
+          >
+            <span>Field Line Mode</span>
+            <span className="text-xs font-semibold">
+              {fieldLineMode === "animated_dashes"
+                ? "Animated"
+                : "Static Arrows"}
+            </span>
+          </button>
+          <button
+            type="button"
             onClick={() => setShowHeatmap((current) => !current)}
             className={`flex w-full items-center justify-between rounded-md px-3 py-2 text-sm transition-all duration-200 ${
               showHeatmap
@@ -353,6 +378,7 @@ export function ElectricFieldSandbox() {
           charges={charges}
           bounds={bounds}
           useGradient={showFieldLineGradient}
+          mode={fieldLineMode}
           className="pointer-events-none absolute inset-0 h-full w-full"
         />
 
