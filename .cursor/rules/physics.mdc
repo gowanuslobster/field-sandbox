@@ -1,0 +1,12 @@
+---
+description: Standards for physics integration and vector math
+globs: src/physics/**/*, src/hooks/usePhysics.ts
+---
+# Physics Logic Standards
+
+- Always refer to `gowanuslobster/kinematics-sandbox` for the established `Vector2D` class structure.
+- Implementation must use **Symplectic Euler-Cromer** for motion.
+- For Electric Potential ($V$), use the superposition principle: $V = \sum \frac{k q_i}{r_i}$.
+- For Electric Field ($\vec{E}$), calculate the negative gradient of the potential or the vector sum of Coulomb forces.
+- When rendering the potential heatmap, use a **Fragment Shader** to avoid CPU bottlenecks.
+

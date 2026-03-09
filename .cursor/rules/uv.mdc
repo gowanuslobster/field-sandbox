@@ -1,0 +1,11 @@
+---
+description: Standards for using the uv package manager and python scripts
+globs: *.py, pyproject.toml, .python-version
+---
+# Python & Task Runner Standards (uv)
+
+- Use `uv` for all Python-related tasks, environment management, and package installations.
+- If a Python script is needed for physics validation or data generation, run it via `uv run <script>.py`.
+- Prefer `uv pip install` over standard `pip` for speed and reliability.
+- When generating new Python-based physics utilities, ensure a `.python-version` file is present in the relevant directory.
+
