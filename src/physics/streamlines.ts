@@ -9,17 +9,19 @@ type TraceOptions = {
   captureRadius: number;
   softening: number;
   seedOffsetRadius: number;
-  linesPerCharge: number;
+  angularOffset: number;
+  adaptiveStepThreshold: number;
 };
 
 const DEFAULT_TRACE_OPTIONS: TraceOptions = {
   stepSize: 0.03,
-  maxSteps: 420,
+  maxSteps: 360,
   minFieldMagnitude: 0.0025,
-  captureRadius: 0.065,
+  captureRadius: 0.06,
   softening: 0.04,
-  seedOffsetRadius: 0.078,
-  linesPerCharge: 16,
+  seedOffsetRadius: 0.076,
+  angularOffset: 0.08,
+  adaptiveStepThreshold: 0.24,
 };
 
 function inBounds(point: Vector2Like, bounds: WorldBounds): boolean {
@@ -31,17 +33,54 @@ function inBounds(point: Vector2Like, bounds: WorldBounds): boolean {
   );
 }
 
+function toSpatialCellKey(
+  point: Vector2Like,
+  bounds: WorldBounds,
+  resolution: number,
+): string | null {
+  if (!inBounds(point, bounds)) {
+    return null;
+  }
+  const xNorm = (point.x - bounds.minX) / (bounds.maxX - bounds.minX);
+  const yNorm = (point.y - bounds.minY) / (bounds.maxY - bounds.minY);
+  const cellX = Math.floor(xNorm * resolution);
+  const cellY = Math.floor(yNorm * resolution);
+  return `${cellX}:${cellY}`;
+}
+
 function nearAnyCharge(
   point: Vector2Like,
   charges: Charge[],
+  directionSign: number,
   captureRadius: number,
+  sourceChargeId: string | null,
 ): boolean {
   const captureRadiusSquared = captureRadius * captureRadius;
+  const captureNegative = directionSign > 0;
   return charges.some((charge) => {
+    if (sourceChargeId && charge.id === sourceChargeId) {
+      return false;
+    }
+    if (captureNegative ? charge.value >= 0 : charge.value <= 0) {
+      return false;
+    }
     const dx = point.x - charge.position.x;
     const dy = point.y - charge.position.y;
-    return dx * dx + dy * dy < captureRadiusSquared;
+    return dx * dx + dy * dy <= captureRadiusSquared;
   });
+}
+
+function distanceToNearestCharge(point: Vector2Like, charges: Charge[]): number {
+  let minSquared = Number.POSITIVE_INFINITY;
+  for (const charge of charges) {
+    const dx = point.x - charge.position.x;
+    const dy = point.y - charge.position.y;
+    const squared = dx * dx + dy * dy;
+    if (squared < minSquared) {
+      minSquared = squared;
+    }
+  }
+  return Math.sqrt(minSquared);
 }
 
 function rk4DirectionStep(
@@ -76,6 +115,7 @@ function traceDirection(
   bounds: WorldBounds,
   directionSign: number,
   options: TraceOptions,
+  sourceChargeId: string | null,
 ): Vector2D[] {
   const points: Vector2D[] = [];
   let current = Vector2D.from(seed);
@@ -91,15 +131,30 @@ function traceDirection(
     if (field.magnitude() < options.minFieldMagnitude) {
       break;
     }
-    if (step > 0 && nearAnyCharge(current, charges, options.captureRadius)) {
+    if (
+      step > 0 &&
+      nearAnyCharge(
+        current,
+        charges,
+        directionSign,
+        options.captureRadius,
+        sourceChargeId,
+      )
+    ) {
       break;
     }
 
     points.push(current);
+    const nearestChargeDistance = distanceToNearestCharge(current, charges);
+    const adaptiveScale = Math.min(
+      1,
+      nearestChargeDistance / options.adaptiveStepThreshold,
+    );
+    const effectiveStep = options.stepSize * Math.max(0.18, adaptiveScale);
     current = rk4DirectionStep(
       current,
       directionSign,
-      options.stepSize,
+      effectiveStep,
       charges,
       options.softening,
     );
@@ -113,30 +168,50 @@ export function traceFieldLine(
   charges: Charge[],
   bounds: WorldBounds,
   directionSign: number,
+  sourceChargeId: string | null,
   options?: Partial<TraceOptions>,
 ): Vector2D[] {
   const mergedOptions = { ...DEFAULT_TRACE_OPTIONS, ...options };
-  return traceDirection(seed, charges, bounds, directionSign, mergedOptions);
+  return traceDirection(
+    seed,
+    charges,
+    bounds,
+    directionSign,
+    mergedOptions,
+    sourceChargeId,
+  );
 }
 
 export function buildSeedPoints(
   charges: Charge[],
   bounds: WorldBounds,
   options?: Partial<TraceOptions>,
-): Array<{ seed: Vector2D; directionSign: number }> {
+): Array<{ seed: Vector2D; directionSign: number; sourceChargeId: string }> {
   const mergedOptions = { ...DEFAULT_TRACE_OPTIONS, ...options };
-  const seeds: Array<{ seed: Vector2D; directionSign: number }> = [];
+  const seeds: Array<{
+    seed: Vector2D;
+    directionSign: number;
+    sourceChargeId: string;
+  }> = [];
+  const seedRadius = Math.max(
+    mergedOptions.seedOffsetRadius,
+    mergedOptions.captureRadius * 1.15,
+  );
 
-  for (const charge of charges) {
+  for (let chargeIndex = 0; chargeIndex < charges.length; chargeIndex += 1) {
+    const charge = charges[chargeIndex];
     const directionSign = charge.value >= 0 ? 1 : -1;
-    for (let lineIndex = 0; lineIndex < mergedOptions.linesPerCharge; lineIndex += 1) {
-      const angle = (lineIndex / mergedOptions.linesPerCharge) * Math.PI * 2;
+    const seedsForCharge = Math.max(8, Math.floor(Math.abs(charge.value) * 12));
+    const chargeAngularOffset =
+      mergedOptions.angularOffset + chargeIndex * 0.097;
+    for (let lineIndex = 0; lineIndex < seedsForCharge; lineIndex += 1) {
+      const angle = chargeAngularOffset + (lineIndex / seedsForCharge) * Math.PI * 2;
       const radial = new Vector2D(Math.cos(angle), Math.sin(angle)).scale(
-        mergedOptions.seedOffsetRadius,
+        seedRadius,
       );
       const seed = Vector2D.from(charge.position).add(radial);
       if (inBounds(seed, bounds)) {
-        seeds.push({ seed, directionSign });
+        seeds.push({ seed, directionSign, sourceChargeId: charge.id });
       }
     }
   }
@@ -151,11 +226,42 @@ export function buildFieldLines(
   const options = { ...DEFAULT_TRACE_OPTIONS };
   const seeds = buildSeedPoints(charges, bounds, options);
   const lines: Vector2D[][] = [];
+  const occupiedCells = new Set<string>();
 
-  for (const { seed, directionSign } of seeds) {
-    const line = traceFieldLine(seed, charges, bounds, directionSign, options);
+  for (const { seed, directionSign, sourceChargeId } of seeds) {
+    const line = traceFieldLine(
+      seed,
+      charges,
+      bounds,
+      directionSign,
+      sourceChargeId,
+      options,
+    );
     if (line.length > 12) {
+      let sampled = 0;
+      let overlap = 0;
+      for (let index = 0; index < line.length; index += 6) {
+        const key = toSpatialCellKey(line[index], bounds, 180);
+        if (!key) {
+          continue;
+        }
+        sampled += 1;
+        if (occupiedCells.has(key)) {
+          overlap += 1;
+        }
+      }
+
+      if (sampled > 0 && overlap / sampled > 0.74) {
+        continue;
+      }
+
       lines.push(line);
+      for (let index = 0; index < line.length; index += 4) {
+        const key = toSpatialCellKey(line[index], bounds, 180);
+        if (key) {
+          occupiedCells.add(key);
+        }
+      }
     }
   }
 
