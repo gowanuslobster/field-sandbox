@@ -8,6 +8,8 @@ type TraceOptions = {
   minFieldMagnitude: number;
   captureRadius: number;
   softening: number;
+  seedOffsetRadius: number;
+  linesPerCharge: number;
 };
 
 const DEFAULT_TRACE_OPTIONS: TraceOptions = {
@@ -16,6 +18,8 @@ const DEFAULT_TRACE_OPTIONS: TraceOptions = {
   minFieldMagnitude: 0.0025,
   captureRadius: 0.065,
   softening: 0.04,
+  seedOffsetRadius: 0.078,
+  linesPerCharge: 16,
 };
 
 function inBounds(point: Vector2Like, bounds: WorldBounds): boolean {
@@ -108,69 +112,48 @@ export function traceFieldLine(
   seed: Vector2Like,
   charges: Charge[],
   bounds: WorldBounds,
+  directionSign: number,
   options?: Partial<TraceOptions>,
 ): Vector2D[] {
   const mergedOptions = { ...DEFAULT_TRACE_OPTIONS, ...options };
-  const forward = traceDirection(seed, charges, bounds, 1, mergedOptions);
-  const backward = traceDirection(seed, charges, bounds, -1, mergedOptions);
-
-  if (forward.length + backward.length < 8) {
-    return [];
-  }
-
-  const withoutSharedSeed = backward.reverse().slice(0, -1);
-  return withoutSharedSeed.concat(forward);
+  return traceDirection(seed, charges, bounds, directionSign, mergedOptions);
 }
 
 export function buildSeedPoints(
   charges: Charge[],
   bounds: WorldBounds,
-  targetCount: number,
-): Vector2D[] {
-  const cols = Math.max(14, Math.round(Math.sqrt(targetCount) * 1.7));
-  const rows = Math.max(10, Math.round(Math.sqrt(targetCount) * 1.1));
-  const seeds: Vector2D[] = [];
+  options?: Partial<TraceOptions>,
+): Array<{ seed: Vector2D; directionSign: number }> {
+  const mergedOptions = { ...DEFAULT_TRACE_OPTIONS, ...options };
+  const seeds: Array<{ seed: Vector2D; directionSign: number }> = [];
 
-  const spanX = bounds.maxX - bounds.minX;
-  const spanY = bounds.maxY - bounds.minY;
-  const stepX = spanX / cols;
-  const stepY = spanY / rows;
-
-  for (let row = 0; row <= rows; row += 1) {
-    for (let col = 0; col <= cols; col += 1) {
-      const jitterX = (row % 2 === 0 ? 0.35 : -0.35) * stepX;
-      const jitterY = (col % 2 === 0 ? -0.25 : 0.25) * stepY;
-
-      const point = new Vector2D(
-        bounds.minX + col * stepX + jitterX,
-        bounds.minY + row * stepY + jitterY,
+  for (const charge of charges) {
+    const directionSign = charge.value >= 0 ? 1 : -1;
+    for (let lineIndex = 0; lineIndex < mergedOptions.linesPerCharge; lineIndex += 1) {
+      const angle = (lineIndex / mergedOptions.linesPerCharge) * Math.PI * 2;
+      const radial = new Vector2D(Math.cos(angle), Math.sin(angle)).scale(
+        mergedOptions.seedOffsetRadius,
       );
-      if (!inBounds(point, bounds)) {
-        continue;
-      }
-
-      const fieldMagnitude = electricFieldAtPoint(point, charges).magnitude();
-      const priority = Math.min(fieldMagnitude / 0.12, 1.4);
-      const shouldKeep = priority > 0.18 || (row + col) % 3 === 0;
-      if (shouldKeep) {
-        seeds.push(point);
+      const seed = Vector2D.from(charge.position).add(radial);
+      if (inBounds(seed, bounds)) {
+        seeds.push({ seed, directionSign });
       }
     }
   }
 
-  return seeds.slice(0, targetCount);
+  return seeds;
 }
 
 export function buildFieldLines(
   charges: Charge[],
   bounds: WorldBounds,
-  targetCount: number,
 ): Vector2D[][] {
-  const seeds = buildSeedPoints(charges, bounds, targetCount);
+  const options = { ...DEFAULT_TRACE_OPTIONS };
+  const seeds = buildSeedPoints(charges, bounds, options);
   const lines: Vector2D[][] = [];
 
-  for (const seed of seeds) {
-    const line = traceFieldLine(seed, charges, bounds);
+  for (const { seed, directionSign } of seeds) {
+    const line = traceFieldLine(seed, charges, bounds, directionSign, options);
     if (line.length > 12) {
       lines.push(line);
     }

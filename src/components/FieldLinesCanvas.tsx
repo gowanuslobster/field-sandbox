@@ -40,8 +40,7 @@ export function FieldLinesCanvas({
 }: FieldLinesCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const lines = useMemo(() => {
-    const targetCount = Math.min(120, 26 + charges.length * 22);
-    return buildFieldLines(charges, bounds, targetCount);
+    return buildFieldLines(charges, bounds);
   }, [bounds, charges]);
 
   useEffect(() => {
