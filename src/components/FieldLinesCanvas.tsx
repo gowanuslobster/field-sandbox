@@ -5,7 +5,11 @@ import { electricFieldAtPoint, potentialAtPoint } from "@/physics/electrostatics
 import { buildFieldLines } from "@/physics/streamlines";
 import type { Charge, WorldBounds } from "@/physics/types";
 import type { Vector2Like } from "@/physics/vector2d";
-import { worldToScreen } from "@/physics/world-space";
+import {
+  type WorldToScreenTransform,
+  getWorldToScreenTransform,
+  transformWorldPoint,
+} from "@/physics/world-space";
 
 export type FieldLineRenderMode = "animated_dashes" | "static_arrows";
 
@@ -31,17 +35,15 @@ function drawPolyline(
   context: CanvasRenderingContext2D,
   points: Vector2Like[],
   charges: Charge[],
-  bounds: WorldBounds,
-  width: number,
-  height: number,
+  transform: WorldToScreenTransform,
   useGradient: boolean,
 ): void {
   if (points.length < 2) {
     return;
   }
 
-  const firstPoint = worldToScreen(points[0], bounds, width, height);
-  const lastPoint = worldToScreen(points[points.length - 1], bounds, width, height);
+  const firstPoint = transformWorldPoint(points[0], transform);
+  const lastPoint = transformWorldPoint(points[points.length - 1], transform);
 
   if (useGradient) {
     const startPotential = potentialAtPoint(points[0], charges);
@@ -62,7 +64,7 @@ function drawPolyline(
   context.beginPath();
   context.moveTo(firstPoint.x, firstPoint.y);
   for (let index = 1; index < points.length; index += 1) {
-    const projected = worldToScreen(points[index], bounds, width, height);
+    const projected = transformWorldPoint(points[index], transform);
     context.lineTo(projected.x, projected.y);
   }
   context.stroke();
@@ -72,9 +74,7 @@ function drawDirectionArrows(
   context: CanvasRenderingContext2D,
   points: Vector2Like[],
   charges: Charge[],
-  bounds: WorldBounds,
-  width: number,
-  height: number,
+  transform: WorldToScreenTransform,
 ): void {
   if (points.length < 2) {
     return;
@@ -88,8 +88,8 @@ function drawDirectionArrows(
   for (let index = 0; index < points.length - 1; index += 1) {
     const a = points[index];
     const b = points[index + 1];
-    const aScreen = worldToScreen(a, bounds, width, height);
-    const bScreen = worldToScreen(b, bounds, width, height);
+    const aScreen = transformWorldPoint(a, transform);
+    const bScreen = transformWorldPoint(b, transform);
     const segmentDx = bScreen.x - aScreen.x;
     const segmentDy = bScreen.y - aScreen.y;
     const segmentLength = Math.hypot(segmentDx, segmentDy);
@@ -224,11 +224,12 @@ export function FieldLinesCanvas({
         ? "rgba(188, 142, 255, 0.45)"
         : "rgba(112, 214, 255, 0.35)";
       context.shadowBlur = 8;
+      const transform = getWorldToScreenTransform(bounds, width, height);
 
       for (const line of lines) {
-        drawPolyline(context, line, charges, bounds, width, height, useGradient);
+        drawPolyline(context, line, charges, transform, useGradient);
         if (mode === "static_arrows") {
-          drawDirectionArrows(context, line, charges, bounds, width, height);
+          drawDirectionArrows(context, line, charges, transform);
         }
       }
 

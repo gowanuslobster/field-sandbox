@@ -1,7 +1,9 @@
 "use client";
 
 import {
+  type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
+  type WheelEvent as ReactWheelEvent,
   useCallback,
   useEffect,
   useMemo,
@@ -17,11 +19,17 @@ import { EquipotentialLinesCanvas } from "@/components/EquipotentialLinesCanvas"
 import { VectorFieldCanvas } from "@/components/VectorFieldCanvas";
 import { potentialAtPoint } from "@/physics/electrostatics";
 import type { Charge, WorldBounds } from "@/physics/types";
-import { worldToScreen, screenToWorld } from "@/physics/world-space";
+import {
+  getViewBounds,
+  screenToWorld,
+  worldToScreen,
+} from "@/physics/world-space";
 
 type Mode = "select" | "add_positive" | "add_negative";
 
 const CHARGE_RADIUS_PX = 13;
+const MIN_ZOOM = 0.55;
+const MAX_ZOOM = 6.5;
 
 const INITIAL_CHARGES: Charge[] = [
   { id: "q1", position: { x: -0.72, y: 0 }, value: 1.15 },
@@ -48,6 +56,14 @@ function toChargeClass(value: number, selected: boolean): string {
 export function ElectricFieldSandbox() {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const dragStateRef = useRef<{ chargeId: string } | null>(null);
+  const panStateRef = useRef<{
+    startX: number;
+    startY: number;
+    startOffsetX: number;
+    startOffsetY: number;
+  } | null>(null);
+  const isSpacePressedRef = useRef(false);
+  const cameraRef = useRef({ offsetX: 0, offsetY: 0 });
   const chargesRef = useRef(INITIAL_CHARGES);
   const boundsRef = useRef<WorldBounds>({
     minX: -1.6,
@@ -61,12 +77,37 @@ export function ElectricFieldSandbox() {
   const [charges, setCharges] = useState<Charge[]>(INITIAL_CHARGES);
   const [selectedChargeId, setSelectedChargeId] = useState<string | null>(null);
   const [cursorPotential, setCursorPotential] = useState<number>(0);
+  const [zoom, setZoom] = useState(1);
+  const [offsetX, setOffsetX] = useState(0);
+  const [offsetY, setOffsetY] = useState(0);
   const [showHeatmap, setShowHeatmap] = useState(true);
   const [showVectorGrid, setShowVectorGrid] = useState(true);
   const [showFieldLineGradient, setShowFieldLineGradient] = useState(false);
   const [showEquipotentialLines, setShowEquipotentialLines] = useState(false);
   const [fieldLineMode, setFieldLineMode] =
     useState<FieldLineRenderMode>("animated_dashes");
+
+  const panFromClientDelta = useCallback((clientX: number, clientY: number) => {
+    const activePan = panStateRef.current;
+    if (!activePan) {
+      return false;
+    }
+    const element = containerRef.current;
+    if (!element) {
+      return false;
+    }
+    const rect = element.getBoundingClientRect();
+    if (!rect.width || !rect.height) {
+      return false;
+    }
+    const spanX = boundsRef.current.maxX - boundsRef.current.minX;
+    const spanY = boundsRef.current.maxY - boundsRef.current.minY;
+    const dx = clientX - activePan.startX;
+    const dy = clientY - activePan.startY;
+    setOffsetX(activePan.startOffsetX - (dx / rect.width) * spanX);
+    setOffsetY(activePan.startOffsetY + (dy / rect.height) * spanY);
+    return true;
+  }, []);
 
   useEffect(() => {
     const element = containerRef.current;
@@ -89,20 +130,73 @@ export function ElectricFieldSandbox() {
     return () => observer.disconnect();
   }, []);
 
-  const bounds = useMemo<WorldBounds>(() => {
+  const baseBounds = useMemo<WorldBounds>(() => {
     const aspect = size.width / Math.max(size.height, 1);
     const halfY = 1.12;
     const halfX = halfY * aspect;
     return { minX: -halfX, maxX: halfX, minY: -halfY, maxY: halfY };
   }, [size]);
 
+  const viewBounds = useMemo(
+    () => getViewBounds(baseBounds, { zoom, offsetX, offsetY }),
+    [baseBounds, zoom, offsetX, offsetY],
+  );
+
   useEffect(() => {
     chargesRef.current = charges;
   }, [charges]);
 
   useEffect(() => {
-    boundsRef.current = bounds;
-  }, [bounds]);
+    cameraRef.current = { offsetX, offsetY };
+  }, [offsetX, offsetY]);
+
+  useEffect(() => {
+    boundsRef.current = viewBounds;
+  }, [viewBounds]);
+
+  const clampZoom = useCallback(
+    (value: number) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, value)),
+    [],
+  );
+
+  const zoomAtClientPoint = useCallback(
+    (clientX: number, clientY: number, desiredZoom: number) => {
+      const element = containerRef.current;
+      if (!element) {
+        return;
+      }
+      const rect = element.getBoundingClientRect();
+      if (!rect.width || !rect.height) {
+        return;
+      }
+
+      const boundedZoom = clampZoom(desiredZoom);
+      const localX = clientX - rect.left;
+      const localY = clientY - rect.top;
+      const worldBefore = screenToWorld(
+        { x: localX, y: localY },
+        boundsRef.current,
+        rect.width,
+        rect.height,
+      );
+
+      const spanX = (baseBounds.maxX - baseBounds.minX) / boundedZoom;
+      const spanY = (baseBounds.maxY - baseBounds.minY) / boundedZoom;
+      const normalizedX = localX / rect.width;
+      const normalizedY = (rect.height - localY) / rect.height;
+      const minX = worldBefore.x - normalizedX * spanX;
+      const minY = worldBefore.y - normalizedY * spanY;
+      const centerX = minX + spanX * 0.5;
+      const centerY = minY + spanY * 0.5;
+      const baseCenterX = (baseBounds.minX + baseBounds.maxX) * 0.5;
+      const baseCenterY = (baseBounds.minY + baseBounds.maxY) * 0.5;
+
+      setZoom(boundedZoom);
+      setOffsetX(centerX - baseCenterX);
+      setOffsetY(centerY - baseCenterY);
+    },
+    [baseBounds, clampZoom],
+  );
 
   const getWorldFromClientPoint = useCallback((clientX: number, clientY: number) => {
     const element = containerRef.current;
@@ -119,6 +213,28 @@ export function ElectricFieldSandbox() {
       rect.width,
       rect.height,
     );
+  }, []);
+
+  const zoomByFactor = useCallback(
+    (factor: number) => {
+      const element = containerRef.current;
+      if (!element) {
+        return;
+      }
+      const rect = element.getBoundingClientRect();
+      zoomAtClientPoint(
+        rect.left + rect.width * 0.5,
+        rect.top + rect.height * 0.5,
+        zoom * factor,
+      );
+    },
+    [zoom, zoomAtClientPoint],
+  );
+
+  const resetView = useCallback(() => {
+    setZoom(1);
+    setOffsetX(0);
+    setOffsetY(0);
   }, []);
 
   const startDrag = (chargeId: string) => {
@@ -139,6 +255,24 @@ export function ElectricFieldSandbox() {
 
   useEffect(() => {
     const onPointerMove = (event: PointerEvent) => {
+      if (!panStateRef.current && !dragStateRef.current) {
+        const wantsRightPan = (event.buttons & 2) === 2;
+        const wantsSpacePan =
+          isSpacePressedRef.current && (event.buttons & 1) === 1;
+        if (wantsRightPan || wantsSpacePan) {
+          panStateRef.current = {
+            startX: event.clientX,
+            startY: event.clientY,
+            startOffsetX: cameraRef.current.offsetX,
+            startOffsetY: cameraRef.current.offsetY,
+          };
+        }
+      }
+
+      if (panFromClientDelta(event.clientX, event.clientY)) {
+        return;
+      }
+
       const world = getWorldFromClientPoint(event.clientX, event.clientY);
       if (!world) {
         return;
@@ -158,31 +292,85 @@ export function ElectricFieldSandbox() {
       );
     };
 
+    const onMouseMove = (event: MouseEvent) => {
+      if (!panStateRef.current && !dragStateRef.current) {
+        const wantsRightPan = (event.buttons & 2) === 2;
+        const wantsSpacePan =
+          isSpacePressedRef.current && (event.buttons & 1) === 1;
+        if (wantsRightPan || wantsSpacePan) {
+          panStateRef.current = {
+            startX: event.clientX,
+            startY: event.clientY,
+            startOffsetX: cameraRef.current.offsetX,
+            startOffsetY: cameraRef.current.offsetY,
+          };
+        }
+      }
+      panFromClientDelta(event.clientX, event.clientY);
+    };
+
     const onPointerUp = () => {
       dragStateRef.current = null;
+      panStateRef.current = null;
     };
 
     window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("mousemove", onMouseMove);
     window.addEventListener("pointerup", onPointerUp);
     return () => {
       window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("mousemove", onMouseMove);
       window.removeEventListener("pointerup", onPointerUp);
     };
-  }, [getWorldFromClientPoint]);
+  }, [getWorldFromClientPoint, panFromClientDelta]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      if (event.code === "Space") {
+        isSpacePressedRef.current = true;
+        event.preventDefault();
+      }
       if (event.key === "Delete" || event.key === "Backspace") {
         removeSelectedCharge();
       }
     };
+    const onKeyUp = (event: KeyboardEvent) => {
+      if (event.code === "Space") {
+        isSpacePressedRef.current = false;
+      }
+    };
+    const onBlur = () => {
+      isSpacePressedRef.current = false;
+    };
+
     window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("blur", onBlur);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("blur", onBlur);
+    };
   }, [removeSelectedCharge]);
 
-  const handleCanvasClick = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (mode === "select") {
+  const handleCanvasPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const shouldPan =
+      event.button === 2 ||
+      (event.button === 0 && (isSpacePressedRef.current || mode === "select"));
+    if (shouldPan) {
+      event.preventDefault();
       setSelectedChargeId(null);
+      panStateRef.current = {
+        startX: event.clientX,
+        startY: event.clientY,
+        startOffsetX: offsetX,
+        startOffsetY: offsetY,
+      };
+      event.currentTarget.setPointerCapture(event.pointerId);
+      return;
+    }
+
+    if (event.button !== 0) {
       return;
     }
     const world = getWorldFromClientPoint(event.clientX, event.clientY);
@@ -201,6 +389,26 @@ export function ElectricFieldSandbox() {
       return [...current, newCharge];
     });
     setSelectedChargeId(id);
+  };
+
+  const handleCanvasWheel = (event: ReactWheelEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    const zoomFactor = Math.exp(-event.deltaY * 0.0015);
+    zoomAtClientPoint(event.clientX, event.clientY, zoom * zoomFactor);
+  };
+
+  const handleCanvasMouseDown = (event: ReactMouseEvent<HTMLDivElement>) => {
+    if (event.button !== 2) {
+      return;
+    }
+    event.preventDefault();
+    setSelectedChargeId(null);
+    panStateRef.current = {
+      startX: event.clientX,
+      startY: event.clientY,
+      startOffsetX: cameraRef.current.offsetX,
+      startOffsetY: cameraRef.current.offsetY,
+    };
   };
 
   return (
@@ -256,6 +464,32 @@ export function ElectricFieldSandbox() {
             Remove Selected
           </button>
         </div>
+        <div className="mt-2 grid grid-cols-3 gap-2">
+          <button
+            type="button"
+            onClick={() => zoomByFactor(1.18)}
+            className="rounded-md bg-indigo-300/85 px-2 py-2 text-xs font-medium text-black shadow-[0_0_14px_rgba(129,140,248,0.45)] transition-colors duration-200 hover:bg-indigo-200"
+          >
+            Zoom In
+          </button>
+          <button
+            type="button"
+            onClick={() => zoomByFactor(1 / 1.18)}
+            className="rounded-md bg-indigo-400/25 px-2 py-2 text-xs font-medium text-indigo-100 transition-colors duration-200 hover:bg-indigo-400/38"
+          >
+            Zoom Out
+          </button>
+          <button
+            type="button"
+            onClick={resetView}
+            className="rounded-md bg-zinc-200/20 px-2 py-2 text-xs font-medium text-zinc-200 transition-colors duration-200 hover:bg-zinc-200/32"
+          >
+            Reset View
+          </button>
+        </div>
+        <p className="mt-2 text-xs tracking-wide text-indigo-200/80">
+          View Zoom: {(zoom * 100).toFixed(0)}%
+        </p>
 
         <p className="mt-4 text-[11px] font-medium uppercase tracking-[0.15em] text-zinc-400">
           Visualization Layers
@@ -339,14 +573,23 @@ export function ElectricFieldSandbox() {
           <p className="font-medium tracking-wide text-zinc-100">Charges: {charges.length}</p>
           <p className="text-zinc-300">Cursor potential V ≈ {cursorPotential.toFixed(3)}</p>
           <p className="mt-1 text-zinc-400">
-            Tip: Drag glowing charges or switch interaction modes.
+            Tip: Wheel to zoom; pan with Select-drag, right-drag, or Space-drag.
           </p>
         </div>
       </div>
 
       <div
         ref={containerRef}
-        onPointerDown={handleCanvasClick}
+        onPointerDown={handleCanvasPointerDown}
+        onMouseDown={handleCanvasMouseDown}
+        onPointerUp={() => {
+          panStateRef.current = null;
+        }}
+        onPointerCancel={() => {
+          panStateRef.current = null;
+        }}
+        onWheel={handleCanvasWheel}
+        onContextMenu={(event) => event.preventDefault()}
         className="relative h-full w-full overflow-hidden"
         style={{
           backgroundImage:
@@ -356,20 +599,23 @@ export function ElectricFieldSandbox() {
       >
         <FieldHeatmap
           charges={charges}
-          bounds={bounds}
+          baseBounds={baseBounds}
+          zoom={zoom}
+          offsetX={offsetX}
+          offsetY={offsetY}
           opacity={showHeatmap ? 0.9 : 0}
           className="pointer-events-none absolute inset-0 h-full w-full"
         />
         {showEquipotentialLines ? (
           <EquipotentialLinesCanvas
             charges={charges}
-            bounds={bounds}
+            bounds={viewBounds}
             className="pointer-events-none absolute inset-0 h-full w-full"
           />
         ) : null}
         <FieldLinesCanvas
           charges={charges}
-          bounds={bounds}
+          bounds={viewBounds}
           useGradient={showFieldLineGradient}
           mode={fieldLineMode}
           className="pointer-events-none absolute inset-0 h-full w-full"
@@ -377,19 +623,27 @@ export function ElectricFieldSandbox() {
         {showVectorGrid ? (
           <VectorFieldCanvas
             charges={charges}
-            bounds={bounds}
+            bounds={viewBounds}
             className="pointer-events-none absolute inset-0 h-full w-full"
           />
         ) : null}
 
         {charges.map((charge) => {
-          const screen = worldToScreen(charge.position, bounds, size.width, size.height);
+          const screen = worldToScreen(
+            charge.position,
+            viewBounds,
+            size.width,
+            size.height,
+          );
           const selected = selectedChargeId === charge.id;
           return (
             <button
               key={charge.id}
               type="button"
               onPointerDown={(event) => {
+                if (event.button === 2 || isSpacePressedRef.current) {
+                  return;
+                }
                 event.stopPropagation();
                 startDrag(charge.id);
               }}

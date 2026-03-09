@@ -16,7 +16,9 @@ const FRAGMENT_SHADER_SOURCE = `#version 300 es
 precision highp float;
 
 uniform vec2 uResolution;
-uniform vec4 uBounds;
+uniform vec4 uBaseBounds;
+uniform float uZoom;
+uniform vec2 uOffset;
 uniform int uChargeCount;
 uniform vec3 uCharges[${MAX_CHARGES}];
 uniform float uSoftening;
@@ -27,10 +29,15 @@ out vec4 outColor;
 
 void main() {
   vec2 uv = gl_FragCoord.xy / uResolution;
-  vec2 world = vec2(
-    mix(uBounds.x, uBounds.y, uv.x),
-    mix(uBounds.z, uBounds.w, uv.y)
+  vec2 baseCenter = vec2(
+    (uBaseBounds.x + uBaseBounds.y) * 0.5,
+    (uBaseBounds.z + uBaseBounds.w) * 0.5
   );
+  vec2 baseSpan = vec2(
+    uBaseBounds.y - uBaseBounds.x,
+    uBaseBounds.w - uBaseBounds.z
+  );
+  vec2 world = baseCenter + uOffset + (uv - vec2(0.5, 0.5)) * (baseSpan / uZoom);
 
   float potential = 0.0;
   for (int i = 0; i < ${MAX_CHARGES}; i++) {
@@ -55,14 +62,19 @@ void main() {
 
 type FieldHeatmapProps = {
   charges: Charge[];
-  bounds: WorldBounds;
+  baseBounds: WorldBounds;
+  zoom: number;
+  offsetX: number;
+  offsetY: number;
   opacity?: number;
   className?: string;
 };
 
 type UniformLocations = {
   resolution: WebGLUniformLocation;
-  bounds: WebGLUniformLocation;
+  baseBounds: WebGLUniformLocation;
+  zoom: WebGLUniformLocation;
+  offset: WebGLUniformLocation;
   chargeCount: WebGLUniformLocation;
   charges: WebGLUniformLocation;
   softening: WebGLUniformLocation;
@@ -148,7 +160,9 @@ function createProgram(gl: WebGL2RenderingContext): GlState {
 
   const uniforms: UniformLocations = {
     resolution: getUniform("uResolution"),
-    bounds: getUniform("uBounds"),
+    baseBounds: getUniform("uBaseBounds"),
+    zoom: getUniform("uZoom"),
+    offset: getUniform("uOffset"),
     chargeCount: getUniform("uChargeCount"),
     charges: getUniform("uCharges[0]"),
     softening: getUniform("uSoftening"),
@@ -166,14 +180,19 @@ function createProgram(gl: WebGL2RenderingContext): GlState {
 
 export function FieldHeatmap({
   charges,
-  bounds,
+  baseBounds,
+  zoom,
+  offsetX,
+  offsetY,
   opacity = 0.9,
   className,
 }: FieldHeatmapProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const glStateRef = useRef<GlState | null>(null);
   const chargesRef = useRef(charges);
-  const boundsRef = useRef(bounds);
+  const baseBoundsRef = useRef(baseBounds);
+  const zoomRef = useRef(zoom);
+  const offsetRef = useRef({ x: offsetX, y: offsetY });
   const opacityTargetRef = useRef(opacity);
   const opacityCurrentRef = useRef(opacity);
 
@@ -182,8 +201,16 @@ export function FieldHeatmap({
   }, [charges]);
 
   useEffect(() => {
-    boundsRef.current = bounds;
-  }, [bounds]);
+    baseBoundsRef.current = baseBounds;
+  }, [baseBounds]);
+
+  useEffect(() => {
+    zoomRef.current = zoom;
+  }, [zoom]);
+
+  useEffect(() => {
+    offsetRef.current = { x: offsetX, y: offsetY };
+  }, [offsetX, offsetY]);
 
   useEffect(() => {
     opacityTargetRef.current = opacity;
@@ -236,7 +263,8 @@ export function FieldHeatmap({
       const activeCharges = chargesRef.current.slice(0, MAX_CHARGES);
       const { gl: context, uniforms, program, chargeData } = state;
       const { width, height } = canvas;
-      const boundsValue = boundsRef.current;
+      const baseBoundsValue = baseBoundsRef.current;
+      const offset = offsetRef.current;
 
       context.viewport(0, 0, width, height);
       context.clear(context.COLOR_BUFFER_BIT);
@@ -252,12 +280,14 @@ export function FieldHeatmap({
 
       context.uniform2f(uniforms.resolution, width, height);
       context.uniform4f(
-        uniforms.bounds,
-        boundsValue.minX,
-        boundsValue.maxX,
-        boundsValue.minY,
-        boundsValue.maxY,
+        uniforms.baseBounds,
+        baseBoundsValue.minX,
+        baseBoundsValue.maxX,
+        baseBoundsValue.minY,
+        baseBoundsValue.maxY,
       );
+      context.uniform1f(uniforms.zoom, zoomRef.current);
+      context.uniform2f(uniforms.offset, offset.x, offset.y);
       context.uniform1i(uniforms.chargeCount, activeCharges.length);
       context.uniform3fv(uniforms.charges, chargeData);
       context.uniform1f(uniforms.softening, 0.04);

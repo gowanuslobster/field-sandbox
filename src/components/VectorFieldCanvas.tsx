@@ -3,7 +3,10 @@
 import { useEffect, useRef } from "react";
 import { electricFieldAtPoint, potentialAtPoint } from "@/physics/electrostatics";
 import type { Charge, WorldBounds } from "@/physics/types";
-import { screenToWorld } from "@/physics/world-space";
+import {
+  getWorldToScreenTransform,
+  transformWorldPoint,
+} from "@/physics/world-space";
 
 type VectorFieldCanvasProps = {
   charges: Charge[];
@@ -120,14 +123,21 @@ export function VectorFieldCanvas({
       context.lineJoin = "round";
 
       const spacing = 76;
-      for (let y = spacing * 0.5; y < height; y += spacing) {
-        for (let x = spacing * 0.5; x < width; x += spacing) {
-          const worldPoint = screenToWorld(
-            { x, y },
-            boundsRef.current,
-            width,
-            height,
-          );
+      const transform = getWorldToScreenTransform(boundsRef.current, width, height);
+      const worldStepX = spacing / transform.a;
+      const worldStepY = spacing / Math.abs(transform.d);
+
+      for (
+        let worldY = boundsRef.current.minY + worldStepY * 0.5;
+        worldY <= boundsRef.current.maxY;
+        worldY += worldStepY
+      ) {
+        for (
+          let worldX = boundsRef.current.minX + worldStepX * 0.5;
+          worldX <= boundsRef.current.maxX;
+          worldX += worldStepX
+        ) {
+          const worldPoint = { x: worldX, y: worldY };
           const field = electricFieldAtPoint(worldPoint, chargesRef.current, {
             softening: 0.04,
           });
@@ -141,13 +151,20 @@ export function VectorFieldCanvas({
           const magnitudeHint = Math.min(1, magnitude / (magnitude + 0.11));
           const lengthStrength = magnitudeHint;
           const intensityStrength = magnitudeHint;
-          const unit = field.normalized();
+          const unitWorld = field.normalized();
+          const dirScreenX = transform.a * unitWorld.x;
+          const dirScreenY = transform.d * unitWorld.y;
+          const dirMagnitude = Math.hypot(dirScreenX, dirScreenY);
+          if (dirMagnitude < 1e-6) {
+            continue;
+          }
+          const screenPoint = transformWorldPoint(worldPoint, transform);
           drawArrow(
             context,
-            x,
-            y,
-            unit.x,
-            -unit.y,
+            screenPoint.x,
+            screenPoint.y,
+            dirScreenX / dirMagnitude,
+            dirScreenY / dirMagnitude,
             lengthStrength,
             intensityStrength,
             potential,
