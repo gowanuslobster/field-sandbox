@@ -10,6 +10,7 @@ import {
 } from "react";
 import { FieldHeatmap } from "@/components/FieldHeatmap";
 import { FieldLinesCanvas } from "@/components/FieldLinesCanvas";
+import { VectorFieldCanvas } from "@/components/VectorFieldCanvas";
 import { potentialAtPoint } from "@/physics/electrostatics";
 import type { Charge, WorldBounds } from "@/physics/types";
 import { worldToScreen, screenToWorld } from "@/physics/world-space";
@@ -56,6 +57,7 @@ export function ElectricFieldSandbox() {
   const [charges, setCharges] = useState<Charge[]>(INITIAL_CHARGES);
   const [selectedChargeId, setSelectedChargeId] = useState<string | null>(null);
   const [cursorPotential, setCursorPotential] = useState<number>(0);
+  const [showVectorGrid, setShowVectorGrid] = useState(true);
 
   useEffect(() => {
     const element = containerRef.current;
@@ -235,6 +237,17 @@ export function ElectricFieldSandbox() {
         >
           Remove Selected
         </button>
+        <button
+          type="button"
+          onClick={() => setShowVectorGrid((current) => !current)}
+          className={`rounded-md px-3 py-2 text-sm ${
+            showVectorGrid
+              ? "bg-fuchsia-300/85 text-black"
+              : "bg-fuchsia-400/20 text-fuchsia-100 hover:bg-fuchsia-400/35"
+          }`}
+        >
+          Vector Grid
+        </button>
       </div>
 
       <div className="absolute bottom-4 left-4 z-20 rounded-xl border border-white/10 bg-black/55 px-4 py-3 text-xs backdrop-blur">
@@ -264,6 +277,13 @@ export function ElectricFieldSandbox() {
           bounds={bounds}
           className="pointer-events-none absolute inset-0 h-full w-full"
         />
+        {showVectorGrid ? (
+          <VectorFieldCanvas
+            charges={charges}
+            bounds={bounds}
+            className="pointer-events-none absolute inset-0 h-full w-full"
+          />
+        ) : null}
         <FieldLinesCanvas
           charges={charges}
           bounds={bounds}
