@@ -11,7 +11,7 @@ import {
   transformWorldPoint,
 } from "@/physics/world-space";
 
-export type FieldLineRenderMode = "animated_dashes" | "static_arrows";
+export type FieldLineRenderMode = "animated_dashes" | "static_arrows" | "off";
 
 type FieldLinesCanvasProps = {
   charges: Charge[];
@@ -212,6 +212,11 @@ export function FieldLinesCanvas({
       context.save();
       context.scale(dpr, dpr);
       context.clearRect(0, 0, width, height);
+
+      if (mode === "off") {
+        context.restore();
+        return;
+      }
 
       context.lineWidth = 1.2;
       if (mode === "animated_dashes") {

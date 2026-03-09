@@ -41,6 +41,16 @@ function nextChargeId(): string {
   return `q-${Math.random().toString(36).slice(2, 10)}`;
 }
 
+function nextFieldLineMode(mode: FieldLineRenderMode): FieldLineRenderMode {
+  if (mode === "animated_dashes") {
+    return "static_arrows";
+  }
+  if (mode === "static_arrows") {
+    return "off";
+  }
+  return "animated_dashes";
+}
+
 function toChargeClass(value: number, selected: boolean): string {
   const base =
     "absolute -translate-x-1/2 -translate-y-1/2 rounded-full border transition-transform duration-75 cursor-grab active:cursor-grabbing";
@@ -85,7 +95,7 @@ export function ElectricFieldSandbox() {
   const [showFieldLineGradient, setShowFieldLineGradient] = useState(false);
   const [showEquipotentialLines, setShowEquipotentialLines] = useState(false);
   const [fieldLineMode, setFieldLineMode] =
-    useState<FieldLineRenderMode>("animated_dashes");
+    useState<FieldLineRenderMode>("static_arrows");
 
   const panFromClientDelta = useCallback((clientX: number, clientY: number) => {
     const activePan = panStateRef.current;
@@ -497,22 +507,22 @@ export function ElectricFieldSandbox() {
         <div className="mt-2 space-y-2">
           <button
             type="button"
-            onClick={() =>
-              setFieldLineMode((current) =>
-                current === "animated_dashes" ? "static_arrows" : "animated_dashes",
-              )
-            }
+            onClick={() => setFieldLineMode((current) => nextFieldLineMode(current))}
             className={`flex w-full items-center justify-between rounded-md px-3 py-2 text-sm transition-all duration-200 ${
               fieldLineMode === "animated_dashes"
                 ? "bg-violet-300/85 text-black shadow-[0_0_14px_rgba(196,181,253,0.45)]"
-                : "bg-violet-400/20 text-violet-100 hover:bg-violet-400/35"
+                : fieldLineMode === "static_arrows"
+                  ? "bg-violet-200/85 text-black shadow-[0_0_14px_rgba(216,180,254,0.4)]"
+                  : "bg-violet-400/20 text-violet-100 hover:bg-violet-400/35"
             }`}
           >
             <span>Field Line Mode</span>
             <span className="text-xs font-semibold">
               {fieldLineMode === "animated_dashes"
                 ? "Animated"
-                : "Static Arrows"}
+                : fieldLineMode === "static_arrows"
+                  ? "Static"
+                  : "Off"}
             </span>
           </button>
           <button
