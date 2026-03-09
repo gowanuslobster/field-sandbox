@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { electricFieldAtPoint } from "@/physics/electrostatics";
+import { electricFieldAtPoint, potentialAtPoint } from "@/physics/electrostatics";
 import type { Charge, WorldBounds } from "@/physics/types";
 import { screenToWorld } from "@/physics/world-space";
 
@@ -10,6 +10,11 @@ type VectorFieldCanvasProps = {
   bounds: WorldBounds;
   className?: string;
 };
+
+type Rgb = { r: number; g: number; b: number };
+
+const NEON_NEGATIVE: Rgb = { r: 61, g: 196, b: 255 };
+const NEON_POSITIVE: Rgb = { r: 255, g: 122, b: 63 };
 
 export function VectorFieldCanvas({
   charges,
@@ -57,37 +62,45 @@ export function VectorFieldCanvas({
       y: number,
       dx: number,
       dy: number,
-      strength: number,
+      lengthStrength: number,
+      intensityStrength: number,
+      potentialSign: number,
     ) => {
-      const length = 4 + strength * 10;
+      // Power-law length keeps strong vectors readable without heavy overlap.
+      const length = 5.2 + Math.pow(lengthStrength, 0.45) * 10.8;
       const startX = x - dx * length * 0.45;
       const startY = y - dy * length * 0.45;
       const endX = x + dx * length * 0.55;
       const endY = y + dy * length * 0.55;
 
-      context.strokeStyle = `rgba(160, 232, 255, ${0.16 + strength * 0.52})`;
-      context.lineWidth = 0.8 + strength * 0.85;
+      const paletteColor = potentialSign >= 0 ? NEON_POSITIVE : NEON_NEGATIVE;
+      const intensity = Math.pow(intensityStrength, 2.15);
+      const alpha = 0.08 + intensity * 0.92;
+
+      context.strokeStyle = `rgba(${Math.round(paletteColor.r)}, ${Math.round(paletteColor.g)}, ${Math.round(paletteColor.b)}, ${alpha})`;
+      context.lineWidth = 0.9 + Math.pow(lengthStrength, 0.6) * 1.25;
+      context.shadowColor = `rgba(${Math.round(paletteColor.r)}, ${Math.round(paletteColor.g)}, ${Math.round(paletteColor.b)}, ${0.08 + intensity * 0.82})`;
+      context.shadowBlur = 2 + intensity * 11;
       context.beginPath();
       context.moveTo(startX, startY);
       context.lineTo(endX, endY);
       context.stroke();
 
-      const headLength = 2.8 + strength * 4;
+      const headLength = 3.2 + Math.pow(lengthStrength, 0.6) * 4.6;
       const angle = Math.atan2(dy, dx);
-      const wing = 0.56;
+      const wing = 0.62;
+      const leftX = endX - headLength * Math.cos(angle - wing);
+      const leftY = endY - headLength * Math.sin(angle - wing);
+      const rightX = endX - headLength * Math.cos(angle + wing);
+      const rightY = endY - headLength * Math.sin(angle + wing);
 
+      context.fillStyle = `rgba(${Math.round(paletteColor.r)}, ${Math.round(paletteColor.g)}, ${Math.round(paletteColor.b)}, ${Math.min(1, alpha + 0.07)})`;
       context.beginPath();
       context.moveTo(endX, endY);
-      context.lineTo(
-        endX - headLength * Math.cos(angle - wing),
-        endY - headLength * Math.sin(angle - wing),
-      );
-      context.moveTo(endX, endY);
-      context.lineTo(
-        endX - headLength * Math.cos(angle + wing),
-        endY - headLength * Math.sin(angle + wing),
-      );
-      context.stroke();
+      context.lineTo(leftX, leftY);
+      context.lineTo(rightX, rightY);
+      context.closePath();
+      context.fill();
     };
 
     const render = () => {
@@ -103,8 +116,8 @@ export function VectorFieldCanvas({
       context.save();
       context.scale(dpr, dpr);
       context.clearRect(0, 0, width, height);
-      context.shadowColor = "rgba(82, 210, 255, 0.34)";
-      context.shadowBlur = 3.5;
+      context.lineCap = "round";
+      context.lineJoin = "round";
 
       const spacing = 76;
       for (let y = spacing * 0.5; y < height; y += spacing) {
@@ -122,9 +135,23 @@ export function VectorFieldCanvas({
           if (magnitude < 1e-4) {
             continue;
           }
-          const strength = Math.min(1, Math.log1p(magnitude * 3.5) / 2.3);
+          const potential = potentialAtPoint(worldPoint, chargesRef.current, {
+            softening: 0.04,
+          });
+          const magnitudeHint = Math.min(1, magnitude / (magnitude + 0.11));
+          const lengthStrength = magnitudeHint;
+          const intensityStrength = magnitudeHint;
           const unit = field.normalized();
-          drawArrow(context, x, y, unit.x, -unit.y, strength);
+          drawArrow(
+            context,
+            x,
+            y,
+            unit.x,
+            -unit.y,
+            lengthStrength,
+            intensityStrength,
+            potential,
+          );
         }
       }
 

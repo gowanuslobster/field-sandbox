@@ -367,13 +367,6 @@ export function ElectricFieldSandbox() {
             className="pointer-events-none absolute inset-0 h-full w-full"
           />
         ) : null}
-        {showVectorGrid ? (
-          <VectorFieldCanvas
-            charges={charges}
-            bounds={bounds}
-            className="pointer-events-none absolute inset-0 h-full w-full"
-          />
-        ) : null}
         <FieldLinesCanvas
           charges={charges}
           bounds={bounds}
@@ -381,6 +374,13 @@ export function ElectricFieldSandbox() {
           mode={fieldLineMode}
           className="pointer-events-none absolute inset-0 h-full w-full"
         />
+        {showVectorGrid ? (
+          <VectorFieldCanvas
+            charges={charges}
+            bounds={bounds}
+            className="pointer-events-none absolute inset-0 h-full w-full"
+          />
+        ) : null}
 
         {charges.map((charge) => {
           const screen = worldToScreen(charge.position, bounds, size.width, size.height);
