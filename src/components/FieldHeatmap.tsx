@@ -272,10 +272,10 @@ export function FieldHeatmap({
 
       chargeData.fill(0);
       for (let i = 0; i < activeCharges.length; i += 1) {
-        const offset = i * 3;
-        chargeData[offset] = activeCharges[i].position.x;
-        chargeData[offset + 1] = activeCharges[i].position.y;
-        chargeData[offset + 2] = activeCharges[i].value;
+        const dataOffset = i * 3;
+        chargeData[dataOffset] = activeCharges[i].position.x;
+        chargeData[dataOffset + 1] = activeCharges[i].position.y;
+        chargeData[dataOffset + 2] = activeCharges[i].value;
       }
 
       context.uniform2f(uniforms.resolution, width, height);
