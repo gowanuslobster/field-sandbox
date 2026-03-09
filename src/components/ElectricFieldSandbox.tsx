@@ -10,6 +10,7 @@ import {
 } from "react";
 import { FieldHeatmap } from "@/components/FieldHeatmap";
 import { FieldLinesCanvas } from "@/components/FieldLinesCanvas";
+import { EquipotentialLinesCanvas } from "@/components/EquipotentialLinesCanvas";
 import { VectorFieldCanvas } from "@/components/VectorFieldCanvas";
 import { potentialAtPoint } from "@/physics/electrostatics";
 import type { Charge, WorldBounds } from "@/physics/types";
@@ -57,7 +58,10 @@ export function ElectricFieldSandbox() {
   const [charges, setCharges] = useState<Charge[]>(INITIAL_CHARGES);
   const [selectedChargeId, setSelectedChargeId] = useState<string | null>(null);
   const [cursorPotential, setCursorPotential] = useState<number>(0);
+  const [showHeatmap, setShowHeatmap] = useState(true);
   const [showVectorGrid, setShowVectorGrid] = useState(true);
+  const [showFieldLineGradient, setShowFieldLineGradient] = useState(false);
+  const [showEquipotentialLines, setShowEquipotentialLines] = useState(false);
 
   useEffect(() => {
     const element = containerRef.current;
@@ -239,6 +243,39 @@ export function ElectricFieldSandbox() {
         </button>
         <button
           type="button"
+          onClick={() => setShowHeatmap((current) => !current)}
+          className={`rounded-md px-3 py-2 text-sm ${
+            showHeatmap
+              ? "bg-emerald-300/85 text-black"
+              : "bg-emerald-400/20 text-emerald-100 hover:bg-emerald-400/35"
+          }`}
+        >
+          Show Potential Heatmap
+        </button>
+        <button
+          type="button"
+          onClick={() => setShowFieldLineGradient((current) => !current)}
+          className={`rounded-md px-3 py-2 text-sm ${
+            showFieldLineGradient
+              ? "bg-amber-300/85 text-black"
+              : "bg-amber-400/20 text-amber-100 hover:bg-amber-400/35"
+          }`}
+        >
+          Show Field Line Gradient
+        </button>
+        <button
+          type="button"
+          onClick={() => setShowEquipotentialLines((current) => !current)}
+          className={`rounded-md px-3 py-2 text-sm ${
+            showEquipotentialLines
+              ? "bg-sky-300/90 text-black"
+              : "bg-sky-400/20 text-sky-100 hover:bg-sky-400/35"
+          }`}
+        >
+          Show Equipotential Lines
+        </button>
+        <button
+          type="button"
           onClick={() => setShowVectorGrid((current) => !current)}
           className={`rounded-md px-3 py-2 text-sm ${
             showVectorGrid
@@ -246,7 +283,7 @@ export function ElectricFieldSandbox() {
               : "bg-fuchsia-400/20 text-fuchsia-100 hover:bg-fuchsia-400/35"
           }`}
         >
-          Vector Grid
+          Show Vector Grid
         </button>
       </div>
 
@@ -275,8 +312,16 @@ export function ElectricFieldSandbox() {
         <FieldHeatmap
           charges={charges}
           bounds={bounds}
+          opacity={showHeatmap ? 0.9 : 0}
           className="pointer-events-none absolute inset-0 h-full w-full"
         />
+        {showEquipotentialLines ? (
+          <EquipotentialLinesCanvas
+            charges={charges}
+            bounds={bounds}
+            className="pointer-events-none absolute inset-0 h-full w-full"
+          />
+        ) : null}
         {showVectorGrid ? (
           <VectorFieldCanvas
             charges={charges}
@@ -287,6 +332,7 @@ export function ElectricFieldSandbox() {
         <FieldLinesCanvas
           charges={charges}
           bounds={bounds}
+          useGradient={showFieldLineGradient}
           className="pointer-events-none absolute inset-0 h-full w-full"
         />
 

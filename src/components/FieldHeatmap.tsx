@@ -56,6 +56,7 @@ void main() {
 type FieldHeatmapProps = {
   charges: Charge[];
   bounds: WorldBounds;
+  opacity?: number;
   className?: string;
 };
 
@@ -163,11 +164,18 @@ function createProgram(gl: WebGL2RenderingContext): GlState {
   };
 }
 
-export function FieldHeatmap({ charges, bounds, className }: FieldHeatmapProps) {
+export function FieldHeatmap({
+  charges,
+  bounds,
+  opacity = 0.9,
+  className,
+}: FieldHeatmapProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const glStateRef = useRef<GlState | null>(null);
   const chargesRef = useRef(charges);
   const boundsRef = useRef(bounds);
+  const opacityTargetRef = useRef(opacity);
+  const opacityCurrentRef = useRef(opacity);
 
   useEffect(() => {
     chargesRef.current = charges;
@@ -176,6 +184,10 @@ export function FieldHeatmap({ charges, bounds, className }: FieldHeatmapProps) 
   useEffect(() => {
     boundsRef.current = bounds;
   }, [bounds]);
+
+  useEffect(() => {
+    opacityTargetRef.current = opacity;
+  }, [opacity]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -250,7 +262,9 @@ export function FieldHeatmap({ charges, bounds, className }: FieldHeatmapProps) 
       context.uniform3fv(uniforms.charges, chargeData);
       context.uniform1f(uniforms.softening, 0.04);
       context.uniform1f(uniforms.potentialScale, 0.6);
-      context.uniform1f(uniforms.opacity, 0.9);
+      opacityCurrentRef.current +=
+        (opacityTargetRef.current - opacityCurrentRef.current) * 0.14;
+      context.uniform1f(uniforms.opacity, opacityCurrentRef.current);
       context.drawArrays(context.TRIANGLES, 0, 6);
 
       animationFrame = window.requestAnimationFrame(render);
