@@ -200,103 +200,123 @@ export function ElectricFieldSandbox() {
 
   return (
     <section className="h-dvh w-full bg-[#0F0F0F] text-zinc-100">
-      <div className="absolute left-4 top-4 z-20 flex gap-2 rounded-xl border border-white/10 bg-black/55 p-2 backdrop-blur">
-        <button
-          type="button"
-          onClick={() => setMode("select")}
-          className={`rounded-md px-3 py-2 text-sm ${
-            mode === "select"
-              ? "bg-white text-black"
-              : "bg-white/10 text-white hover:bg-white/20"
-          }`}
-        >
-          Select / Drag
-        </button>
-        <button
-          type="button"
-          onClick={() => setMode("add_positive")}
-          className={`rounded-md px-3 py-2 text-sm ${
-            mode === "add_positive"
-              ? "bg-orange-300 text-black"
-              : "bg-orange-400/20 text-orange-200 hover:bg-orange-400/35"
-          }`}
-        >
-          + Add Charge
-        </button>
-        <button
-          type="button"
-          onClick={() => setMode("add_negative")}
-          className={`rounded-md px-3 py-2 text-sm ${
-            mode === "add_negative"
-              ? "bg-cyan-200 text-black"
-              : "bg-cyan-400/20 text-cyan-100 hover:bg-cyan-400/35"
-          }`}
-        >
-          - Add Charge
-        </button>
-        <button
-          type="button"
-          onClick={removeSelectedCharge}
-          className="rounded-md bg-rose-400/20 px-3 py-2 text-sm text-rose-100 hover:bg-rose-400/35"
-        >
-          Remove Selected
-        </button>
-        <button
-          type="button"
-          onClick={() => setShowHeatmap((current) => !current)}
-          className={`rounded-md px-3 py-2 text-sm ${
-            showHeatmap
-              ? "bg-emerald-300/85 text-black"
-              : "bg-emerald-400/20 text-emerald-100 hover:bg-emerald-400/35"
-          }`}
-        >
-          Show Potential Heatmap
-        </button>
-        <button
-          type="button"
-          onClick={() => setShowFieldLineGradient((current) => !current)}
-          className={`rounded-md px-3 py-2 text-sm ${
-            showFieldLineGradient
-              ? "bg-amber-300/85 text-black"
-              : "bg-amber-400/20 text-amber-100 hover:bg-amber-400/35"
-          }`}
-        >
-          Show Field Line Gradient
-        </button>
-        <button
-          type="button"
-          onClick={() => setShowEquipotentialLines((current) => !current)}
-          className={`rounded-md px-3 py-2 text-sm ${
-            showEquipotentialLines
-              ? "bg-sky-300/90 text-black"
-              : "bg-sky-400/20 text-sky-100 hover:bg-sky-400/35"
-          }`}
-        >
-          Show Equipotential Lines
-        </button>
-        <button
-          type="button"
-          onClick={() => setShowVectorGrid((current) => !current)}
-          className={`rounded-md px-3 py-2 text-sm ${
-            showVectorGrid
-              ? "bg-fuchsia-300/85 text-black"
-              : "bg-fuchsia-400/20 text-fuchsia-100 hover:bg-fuchsia-400/35"
-          }`}
-        >
-          Show Vector Grid
-        </button>
-      </div>
+      <div className="absolute left-4 top-4 z-20 w-[330px] rounded-2xl border border-cyan-300/20 bg-black/65 p-4 shadow-[0_0_36px_rgba(56,189,248,0.2)] backdrop-blur-md">
+        <p className="text-xs uppercase tracking-[0.22em] text-cyan-200/70">
+          Field Sandbox
+        </p>
+        <h1 className="mt-1 text-lg font-semibold text-white">Control Overlay</h1>
 
-      <div className="absolute bottom-4 left-4 z-20 rounded-xl border border-white/10 bg-black/55 px-4 py-3 text-xs backdrop-blur">
-        <p className="font-medium tracking-wide text-zinc-100">
-          Charges: {charges.length}
+        <p className="mt-3 text-[11px] font-medium uppercase tracking-[0.15em] text-zinc-400">
+          Charge Interaction
         </p>
-        <p className="text-zinc-300">
-          Cursor potential V ≈ {cursorPotential.toFixed(3)}
+        <div className="mt-2 grid grid-cols-2 gap-2">
+          <button
+            type="button"
+            onClick={() => setMode("select")}
+            className={`rounded-md px-3 py-2 text-sm transition-all duration-200 ${
+              mode === "select"
+                ? "bg-white text-black shadow-[0_0_20px_rgba(255,255,255,0.35)]"
+                : "bg-white/10 text-white hover:bg-white/20"
+            }`}
+          >
+            Select / Drag
+          </button>
+          <button
+            type="button"
+            onClick={() => setMode("add_positive")}
+            className={`rounded-md px-3 py-2 text-sm transition-all duration-200 ${
+              mode === "add_positive"
+                ? "bg-orange-300 text-black shadow-[0_0_20px_rgba(255,160,90,0.45)]"
+                : "bg-orange-400/20 text-orange-200 hover:bg-orange-400/35"
+            }`}
+          >
+            + Add Charge
+          </button>
+          <button
+            type="button"
+            onClick={() => setMode("add_negative")}
+            className={`rounded-md px-3 py-2 text-sm transition-all duration-200 ${
+              mode === "add_negative"
+                ? "bg-cyan-200 text-black shadow-[0_0_20px_rgba(94,220,255,0.45)]"
+                : "bg-cyan-400/20 text-cyan-100 hover:bg-cyan-400/35"
+            }`}
+          >
+            - Add Charge
+          </button>
+          <button
+            type="button"
+            onClick={removeSelectedCharge}
+            className="rounded-md bg-rose-400/20 px-3 py-2 text-sm text-rose-100 transition-colors duration-200 hover:bg-rose-400/35"
+          >
+            Remove Selected
+          </button>
+        </div>
+
+        <p className="mt-4 text-[11px] font-medium uppercase tracking-[0.15em] text-zinc-400">
+          Visualization Layers
         </p>
-        <p className="mt-1 text-zinc-400">
-          Tip: Drag glowing charges, or switch modes to place new ones.
-        </p>
+        <div className="mt-2 space-y-2">
+          <button
+            type="button"
+            onClick={() => setShowHeatmap((current) => !current)}
+            className={`flex w-full items-center justify-between rounded-md px-3 py-2 text-sm transition-all duration-200 ${
+              showHeatmap
+                ? "bg-emerald-300/85 text-black shadow-[0_0_14px_rgba(52,211,153,0.4)]"
+                : "bg-emerald-400/20 text-emerald-100 hover:bg-emerald-400/35"
+            }`}
+          >
+            <span>Show Potential Heatmap</span>
+            <span className="text-xs font-semibold">{showHeatmap ? "ON" : "OFF"}</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowFieldLineGradient((current) => !current)}
+            className={`flex w-full items-center justify-between rounded-md px-3 py-2 text-sm transition-all duration-200 ${
+              showFieldLineGradient
+                ? "bg-amber-300/85 text-black shadow-[0_0_14px_rgba(251,191,36,0.4)]"
+                : "bg-amber-400/20 text-amber-100 hover:bg-amber-400/35"
+            }`}
+          >
+            <span>Show Field Line Gradient</span>
+            <span className="text-xs font-semibold">
+              {showFieldLineGradient ? "ON" : "OFF"}
+            </span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowEquipotentialLines((current) => !current)}
+            className={`flex w-full items-center justify-between rounded-md px-3 py-2 text-sm transition-all duration-200 ${
+              showEquipotentialLines
+                ? "bg-sky-300/90 text-black shadow-[0_0_14px_rgba(56,189,248,0.42)]"
+                : "bg-sky-400/20 text-sky-100 hover:bg-sky-400/35"
+            }`}
+          >
+            <span>Show Equipotential Lines</span>
+            <span className="text-xs font-semibold">
+              {showEquipotentialLines ? "ON" : "OFF"}
+            </span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowVectorGrid((current) => !current)}
+            className={`flex w-full items-center justify-between rounded-md px-3 py-2 text-sm transition-all duration-200 ${
+              showVectorGrid
+                ? "bg-fuchsia-300/85 text-black shadow-[0_0_14px_rgba(232,121,249,0.45)]"
+                : "bg-fuchsia-400/20 text-fuchsia-100 hover:bg-fuchsia-400/35"
+            }`}
+          >
+            <span>Show Vector Grid</span>
+            <span className="text-xs font-semibold">{showVectorGrid ? "ON" : "OFF"}</span>
+          </button>
+        </div>
+
+        <div className="mt-4 rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-xs">
+          <p className="font-medium tracking-wide text-zinc-100">Charges: {charges.length}</p>
+          <p className="text-zinc-300">Cursor potential V ≈ {cursorPotential.toFixed(3)}</p>
+          <p className="mt-1 text-zinc-400">
+            Tip: Drag glowing charges or switch interaction modes.
+          </p>
+        </div>
       </div>
 
       <div
