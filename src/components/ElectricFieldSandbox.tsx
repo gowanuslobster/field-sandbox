@@ -28,7 +28,7 @@ import {
 type Mode = "select" | "add_positive" | "add_negative";
 
 const CHARGE_RADIUS_PX = 13;
-const MIN_ZOOM = 0.55;
+const MIN_ZOOM = 0.1;
 const MAX_ZOOM = 6.5;
 
 const INITIAL_CHARGES: Charge[] = [
