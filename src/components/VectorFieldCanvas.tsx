@@ -16,8 +16,23 @@ type VectorFieldCanvasProps = {
 
 type Rgb = { r: number; g: number; b: number };
 
+const MUTED_NEGATIVE: Rgb = { r: 20, g: 56, b: 84 };
+const MUTED_POSITIVE: Rgb = { r: 84, g: 33, b: 17 };
 const NEON_NEGATIVE: Rgb = { r: 61, g: 196, b: 255 };
 const NEON_POSITIVE: Rgb = { r: 255, g: 122, b: 63 };
+const HOT_PEAK: Rgb = { r: 255, g: 244, b: 170 };
+
+function lerp(a: number, b: number, t: number): number {
+  return a + (b - a) * t;
+}
+
+function mixColor(a: Rgb, b: Rgb, t: number): Rgb {
+  return {
+    r: lerp(a.r, b.r, t),
+    g: lerp(a.g, b.g, t),
+    b: lerp(a.b, b.b, t),
+  };
+}
 
 export function VectorFieldCanvas({
   charges,
@@ -69,27 +84,29 @@ export function VectorFieldCanvas({
       intensityStrength: number,
       potentialSign: number,
     ) => {
-      // Power-law length keeps strong vectors readable without heavy overlap.
-      const length = 5.2 + Math.pow(lengthStrength, 0.45) * 10.8;
+      const hotness = Math.pow(intensityStrength, 4.8);
+      const length = 2.8 + Math.pow(lengthStrength, 0.38) * 19.5 + hotness * 3.2;
       const startX = x - dx * length * 0.45;
       const startY = y - dy * length * 0.45;
       const endX = x + dx * length * 0.55;
       const endY = y + dy * length * 0.55;
 
-      const paletteColor = potentialSign >= 0 ? NEON_POSITIVE : NEON_NEGATIVE;
-      const intensity = Math.pow(intensityStrength, 2.15);
-      const alpha = 0.08 + intensity * 0.92;
+      const mutedColor = potentialSign >= 0 ? MUTED_POSITIVE : MUTED_NEGATIVE;
+      const neonColor = potentialSign >= 0 ? NEON_POSITIVE : NEON_NEGATIVE;
+      const coreColor = mixColor(mutedColor, neonColor, Math.pow(intensityStrength, 0.55));
+      const color = mixColor(coreColor, HOT_PEAK, hotness);
+      const alpha = 0.12 + Math.pow(intensityStrength, 3.65) * 0.88;
 
-      context.strokeStyle = `rgba(${Math.round(paletteColor.r)}, ${Math.round(paletteColor.g)}, ${Math.round(paletteColor.b)}, ${alpha})`;
-      context.lineWidth = 0.9 + Math.pow(lengthStrength, 0.6) * 1.25;
-      context.shadowColor = `rgba(${Math.round(paletteColor.r)}, ${Math.round(paletteColor.g)}, ${Math.round(paletteColor.b)}, ${0.08 + intensity * 0.82})`;
-      context.shadowBlur = 2 + intensity * 11;
+      context.strokeStyle = `rgba(${Math.round(color.r)}, ${Math.round(color.g)}, ${Math.round(color.b)}, ${alpha})`;
+      context.lineWidth = 0.5 + Math.pow(lengthStrength, 0.45) * 2.6 + hotness * 0.7;
+      context.shadowColor = `rgba(${Math.round(color.r)}, ${Math.round(color.g)}, ${Math.round(color.b)}, ${0.12 + Math.pow(intensityStrength, 2.9) * 0.86})`;
+      context.shadowBlur = 1 + Math.pow(intensityStrength, 2.7) * 17;
       context.beginPath();
       context.moveTo(startX, startY);
       context.lineTo(endX, endY);
       context.stroke();
 
-      const headLength = 3.2 + Math.pow(lengthStrength, 0.6) * 4.6;
+      const headLength = 2.4 + Math.pow(lengthStrength, 0.5) * 6.6 + hotness * 1.8;
       const angle = Math.atan2(dy, dx);
       const wing = 0.62;
       const leftX = endX - headLength * Math.cos(angle - wing);
@@ -97,7 +114,7 @@ export function VectorFieldCanvas({
       const rightX = endX - headLength * Math.cos(angle + wing);
       const rightY = endY - headLength * Math.sin(angle + wing);
 
-      context.fillStyle = `rgba(${Math.round(paletteColor.r)}, ${Math.round(paletteColor.g)}, ${Math.round(paletteColor.b)}, ${Math.min(1, alpha + 0.07)})`;
+      context.fillStyle = `rgba(${Math.round(color.r)}, ${Math.round(color.g)}, ${Math.round(color.b)}, ${Math.min(1, alpha + 0.08)})`;
       context.beginPath();
       context.moveTo(endX, endY);
       context.lineTo(leftX, leftY);
@@ -148,7 +165,7 @@ export function VectorFieldCanvas({
           const potential = potentialAtPoint(worldPoint, chargesRef.current, {
             softening: 0.04,
           });
-          const magnitudeHint = Math.min(1, magnitude / (magnitude + 0.11));
+          const magnitudeHint = 1 - Math.exp(-magnitude * 1.65);
           const lengthStrength = magnitudeHint;
           const intensityStrength = magnitudeHint;
           const unitWorld = field.normalized();
