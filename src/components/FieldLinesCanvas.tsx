@@ -23,16 +23,22 @@ type FieldLinesCanvasProps = {
   className?: string;
 };
 
-type FlowPath = {
-  points: Vector2Like[];
-  cumulativeTimes: number[];
-  totalTime: number;
-  phase: number;
+type FlowParticle = {
+  progress: number;
 };
 
-function clamp01(value: number): number {
-  return Math.min(1, Math.max(0, value));
-}
+type FlowPath = {
+  points: Vector2Like[];
+  cumulativeLengths: number[];
+  totalLength: number;
+  particles: FlowParticle[];
+};
+
+const PARTICLES_PER_LINE = 3;
+const FLOW_SPEED = 0.055;
+const MAX_FIELD_FOR_SPEED = 12;
+const TRAIL_LENGTH_PROGRESS = 0.055;
+const TRAIL_SEGMENTS = 6;
 
 function nearestChargeSign(point: Vector2Like, charges: Charge[]): number {
   let bestDistance = Number.POSITIVE_INFINITY;
@@ -84,31 +90,31 @@ function buildFlowPaths(lines: Vector2D[][], charges: Charge[]): FlowPath[] {
       return;
     }
 
-    const cumulativeTimes = [0];
-    let totalTime = 0;
+    const cumulativeLengths = [0];
+    let totalLength = 0;
     for (let pointIndex = 0; pointIndex < points.length - 1; pointIndex += 1) {
       const a = points[pointIndex];
       const b = points[pointIndex + 1];
       const segmentLength = Math.max(Math.hypot(b.x - a.x, b.y - a.y), 1e-5);
-      const midpoint = { x: (a.x + b.x) * 0.5, y: (a.y + b.y) * 0.5 };
-      const fieldMagnitude = electricFieldAtPoint(midpoint, charges).magnitude();
-      const normalizedField = clamp01(
-        Math.log1p(fieldMagnitude * 0.9) / Math.log1p(8),
-      );
-      const speedMultiplier = 0.55 + Math.pow(normalizedField, 1.45) * 2.6;
-      const segmentTime = segmentLength / speedMultiplier;
-      totalTime += segmentTime;
-      cumulativeTimes.push(totalTime);
+      totalLength += segmentLength;
+      cumulativeLengths.push(totalLength);
     }
 
-    if (totalTime <= 1e-5) {
+    if (totalLength <= 1e-5) {
       return;
+    }
+    const phase = (lineIndex * 0.171) % 1;
+    const particles: FlowParticle[] = [];
+    for (let particleIndex = 0; particleIndex < PARTICLES_PER_LINE; particleIndex += 1) {
+      particles.push({
+        progress: (phase + particleIndex / PARTICLES_PER_LINE) % 1,
+      });
     }
     paths.push({
       points,
-      cumulativeTimes,
-      totalTime,
-      phase: (lineIndex * 0.173) % 1,
+      cumulativeLengths,
+      totalLength,
+      particles,
     });
   });
 
@@ -133,24 +139,42 @@ function findSegmentIndex(cumulativeValues: number[], value: number): number {
   return Math.max(0, Math.min(cumulativeValues.length - 2, low));
 }
 
-function samplePathPosition(path: FlowPath, timeValue: number): Vector2Like {
-  if (path.points.length < 2 || path.totalTime <= 1e-6) {
+function samplePathPosition(path: FlowPath, progress: number): Vector2Like {
+  if (path.points.length < 2 || path.totalLength <= 1e-6) {
     return path.points[0] ?? { x: 0, y: 0 };
   }
 
-  const localTime =
-    ((timeValue % path.totalTime) + path.totalTime) % path.totalTime;
-  const segmentIndex = findSegmentIndex(path.cumulativeTimes, localTime);
-  const startTime = path.cumulativeTimes[segmentIndex];
-  const endTime = path.cumulativeTimes[segmentIndex + 1];
-  const span = Math.max(endTime - startTime, 1e-6);
-  const t = (localTime - startTime) / span;
+  const wrappedProgress = ((progress % 1) + 1) % 1;
+  const targetDistance = wrappedProgress * path.totalLength;
+  const segmentIndex = findSegmentIndex(path.cumulativeLengths, targetDistance);
+  const startDistance = path.cumulativeLengths[segmentIndex];
+  const endDistance = path.cumulativeLengths[segmentIndex + 1];
+  const span = Math.max(endDistance - startDistance, 1e-6);
+  const t = (targetDistance - startDistance) / span;
   const start = path.points[segmentIndex];
   const end = path.points[segmentIndex + 1];
   return {
     x: start.x + (end.x - start.x) * t,
     y: start.y + (end.y - start.y) * t,
   };
+}
+
+function updateFlowParticles(
+  flowPaths: FlowPath[],
+  charges: Charge[],
+  deltaSeconds: number,
+): void {
+  for (const path of flowPaths) {
+    for (const particle of path.particles) {
+      const worldPosition = samplePathPosition(path, particle.progress);
+      const localFieldMagnitude = Math.min(
+        electricFieldAtPoint(worldPosition, charges).magnitude(),
+        MAX_FIELD_FOR_SPEED,
+      );
+      particle.progress =
+        (particle.progress + FLOW_SPEED * localFieldMagnitude * deltaSeconds) % 1;
+    }
+  }
 }
 
 function mapPotentialToColor(potential: number, alpha: number): string {
@@ -294,46 +318,41 @@ function drawFlowTrails(
   context: CanvasRenderingContext2D,
   flowPaths: FlowPath[],
   transform: WorldToScreenTransform,
-  flowClock: number,
-  isDragging: boolean,
 ): void {
-  const particlesPerLine = isDragging ? 3 : 4;
-  const trailSegments = isDragging ? 3 : 5;
   for (const path of flowPaths) {
-    if (path.points.length < 2 || path.totalTime <= 1e-6) {
+    if (path.points.length < 2 || path.totalLength <= 1e-6) {
       continue;
     }
-    const particleStride = path.totalTime / particlesPerLine;
-    const trailSpan = Math.min(path.totalTime * 0.22, 0.32);
-    const trailStep = trailSpan / trailSegments;
-    for (let particleIndex = 0; particleIndex < particlesPerLine; particleIndex += 1) {
-      const headTime =
-        flowClock +
-        path.phase * path.totalTime +
-        particleIndex * particleStride;
-      for (let trailIndex = 1; trailIndex <= trailSegments; trailIndex += 1) {
+
+    for (const particle of path.particles) {
+      const trailStep = TRAIL_LENGTH_PROGRESS / TRAIL_SEGMENTS;
+      for (let trailIndex = 1; trailIndex <= TRAIL_SEGMENTS; trailIndex += 1) {
         const currentSample = samplePathPosition(
           path,
-          headTime - (trailIndex - 1) * trailStep,
+          particle.progress - (trailIndex - 1) * trailStep,
         );
-        const previousSample = samplePathPosition(path, headTime - trailIndex * trailStep);
+        const previousSample = samplePathPosition(
+          path,
+          particle.progress - trailIndex * trailStep,
+        );
         const currentScreen = transformWorldPoint(currentSample, transform);
         const previousScreen = transformWorldPoint(previousSample, transform);
-        const fade = 1 - (trailIndex - 1) / trailSegments;
-        const alpha = Math.pow(fade, 1.55) * (isDragging ? 0.35 : 0.82);
+        const fade = 1 - (trailIndex - 1) / TRAIL_SEGMENTS;
+        const alpha = Math.pow(fade, 1.7) * 0.88;
         context.strokeStyle = `rgba(255, 244, 180, ${alpha})`;
-        context.lineWidth = 0.9 + fade * 2;
+        context.lineWidth = 0.85 + fade * 2.25;
         context.beginPath();
         context.moveTo(currentScreen.x, currentScreen.y);
         context.lineTo(previousScreen.x, previousScreen.y);
         context.stroke();
       }
-      const head = transformWorldPoint(samplePathPosition(path, headTime), transform);
-      context.fillStyle = isDragging
-        ? "rgba(255, 245, 190, 0.5)"
-        : "rgba(255, 250, 215, 0.95)";
+      const head = transformWorldPoint(
+        samplePathPosition(path, particle.progress),
+        transform,
+      );
+      context.fillStyle = "rgba(255, 250, 215, 0.95)";
       context.beginPath();
-      context.arc(head.x, head.y, isDragging ? 1.1 : 1.5, 0, Math.PI * 2);
+      context.arc(head.x, head.y, 1.45, 0, Math.PI * 2);
       context.fill();
     }
   }
@@ -357,7 +376,6 @@ export function FieldLinesCanvas({
   const useGradientRef = useRef(useGradient);
   const isSimulatingRef = useRef(isSimulating);
   const isDraggingRef = useRef(isDragging);
-  const flowClockRef = useRef(0);
   const frameTimeRef = useRef<number | null>(null);
   const lastBuildAtRef = useRef(0);
   const buildThrottleTimerRef = useRef<number | null>(null);
@@ -465,8 +483,8 @@ export function FieldLinesCanvas({
       const lastFrameTime = frameTimeRef.current ?? time;
       const deltaSeconds = Math.max(0.001, Math.min(0.05, (time - lastFrameTime) / 1000));
       frameTimeRef.current = time;
-      if (modeRef.current === "animated_dashes") {
-        flowClockRef.current += deltaSeconds * (isDraggingRef.current ? 0.5 : 1.2);
+      if (modeRef.current === "animated_dashes" && !isDraggingRef.current) {
+        updateFlowParticles(flowPathsRef.current, chargesRef.current, deltaSeconds);
       }
 
       const dpr = window.devicePixelRatio || 1;
@@ -485,7 +503,6 @@ export function FieldLinesCanvas({
       }
 
       context.lineWidth = 1.2;
-      context.setLineDash([]);
       context.shadowColor = useGradientRef.current
         ? "rgba(188, 142, 255, 0.45)"
         : "rgba(112, 214, 255, 0.35)";
@@ -507,13 +524,7 @@ export function FieldLinesCanvas({
       if (modeRef.current === "animated_dashes" && !isDraggingRef.current) {
         context.shadowColor = "rgba(255, 230, 160, 0.55)";
         context.shadowBlur = 9;
-        drawFlowTrails(
-          context,
-          flowPathsRef.current,
-          transform,
-          flowClockRef.current,
-          false,
-        );
+        drawFlowTrails(context, flowPathsRef.current, transform);
       }
 
       context.restore();
