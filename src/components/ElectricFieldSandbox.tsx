@@ -14,7 +14,6 @@ import {
   FieldLinesCanvas,
   type FieldLineRenderMode,
 } from "@/components/FieldLinesCanvas";
-import { EquipotentialLinesCanvas } from "@/components/EquipotentialLinesCanvas";
 import { VectorFieldCanvas } from "@/components/VectorFieldCanvas";
 import { potentialAtPoint } from "@/physics/electrostatics";
 import type { Charge, WorldBounds } from "@/physics/types";
@@ -94,6 +93,7 @@ export function ElectricFieldSandbox() {
   const [showVectorGrid, setShowVectorGrid] = useState(true);
   const [showFieldLineGradient, setShowFieldLineGradient] = useState(false);
   const [showEquipotentialLines, setShowEquipotentialLines] = useState(false);
+  const [contourDensity, setContourDensity] = useState(1.3);
   const [fieldLineMode, setFieldLineMode] =
     useState<FieldLineRenderMode>("static_arrows");
   const [isDraggingCharge, setIsDraggingCharge] = useState(false);
@@ -158,6 +158,10 @@ export function ElectricFieldSandbox() {
   const selectedCharge = useMemo(
     () => charges.find((charge) => charge.id === selectedChargeId) ?? null,
     [charges, selectedChargeId],
+  );
+  const contourInterval = useMemo(
+    () => 1 / Math.max(0.35, contourDensity),
+    [contourDensity],
   );
 
   useEffect(() => {
@@ -589,6 +593,24 @@ export function ElectricFieldSandbox() {
               {showEquipotentialLines ? "ON" : "OFF"}
             </span>
           </button>
+          <div className="rounded-lg border border-sky-200/20 bg-sky-950/20 px-3 py-2">
+            <div className="flex items-center justify-between text-xs text-sky-100">
+              <span>Contour Density</span>
+              <span className="font-semibold">{contourDensity.toFixed(1)}x</span>
+            </div>
+            <input
+              type="range"
+              min={0.6}
+              max={3.4}
+              step={0.1}
+              value={contourDensity}
+              onChange={(event) =>
+                setContourDensity(Number.parseFloat(event.currentTarget.value))
+              }
+              className="mt-2 w-full accent-sky-300"
+              aria-label="Contour Density slider"
+            />
+          </div>
           <button
             type="button"
             onClick={() => setShowVectorGrid((current) => !current)}
@@ -637,16 +659,11 @@ export function ElectricFieldSandbox() {
           offsetX={offsetX}
           offsetY={offsetY}
           isSimulating={isSimulating}
+          contourInterval={contourInterval}
+          contourOpacity={showEquipotentialLines ? 0.92 : 0}
           opacity={showHeatmap ? 0.9 : 0}
           className="pointer-events-none absolute inset-0 h-full w-full"
         />
-        {showEquipotentialLines ? (
-          <EquipotentialLinesCanvas
-            charges={charges}
-            bounds={viewBounds}
-            className="pointer-events-none absolute inset-0 h-full w-full"
-          />
-        ) : null}
         <FieldLinesCanvas
           charges={charges}
           bounds={viewBounds}

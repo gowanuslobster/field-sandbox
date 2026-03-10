@@ -24,6 +24,8 @@ uniform vec3 uCharges[${MAX_CHARGES}];
 uniform float uSoftening;
 uniform float uPotentialScale;
 uniform float uOpacity;
+uniform float uContourInterval;
+uniform float uContourOpacity;
 
 out vec4 outColor;
 
@@ -56,6 +58,16 @@ void main() {
   vec3 positive = vec3(1.0, 0.36, 0.17);
   vec3 negative = vec3(0.15, 0.68, 1.0);
   vec3 color = mix(negative, positive, step(0.0, potential)) * intensity;
+
+  float contourPhase = potential / max(uContourInterval, 0.0001);
+  float contourDistance = abs(contourPhase - round(contourPhase));
+  float contourAA = fwidth(contourPhase) * 0.75 + 0.001;
+  float contourMask = 1.0 - smoothstep(0.0, contourAA, contourDistance);
+  float contourBlend = contourMask * clamp(uContourOpacity, 0.0, 1.0);
+  vec3 contourColor = vec3(0.9, 0.96, 1.0);
+  color = mix(color, contourColor, contourBlend * 0.9);
+  alpha = clamp(alpha + contourBlend * 0.92, 0.0, 1.0);
+
   outColor = vec4(color, alpha);
 }
 `;
@@ -67,6 +79,8 @@ type FieldHeatmapProps = {
   offsetX: number;
   offsetY: number;
   isSimulating: boolean;
+  contourInterval?: number;
+  contourOpacity?: number;
   opacity?: number;
   className?: string;
 };
@@ -81,6 +95,8 @@ type UniformLocations = {
   softening: WebGLUniformLocation;
   potentialScale: WebGLUniformLocation;
   opacity: WebGLUniformLocation;
+  contourInterval: WebGLUniformLocation;
+  contourOpacity: WebGLUniformLocation;
 };
 
 type GlState = {
@@ -169,6 +185,8 @@ function createProgram(gl: WebGL2RenderingContext): GlState {
     softening: getUniform("uSoftening"),
     potentialScale: getUniform("uPotentialScale"),
     opacity: getUniform("uOpacity"),
+    contourInterval: getUniform("uContourInterval"),
+    contourOpacity: getUniform("uContourOpacity"),
   };
 
   return {
@@ -186,6 +204,8 @@ export function FieldHeatmap({
   offsetX,
   offsetY,
   isSimulating,
+  contourInterval = 1,
+  contourOpacity = 0,
   opacity = 0.9,
   className,
 }: FieldHeatmapProps) {
@@ -198,6 +218,8 @@ export function FieldHeatmap({
   const isSimulatingRef = useRef(isSimulating);
   const opacityTargetRef = useRef(opacity);
   const opacityCurrentRef = useRef(opacity);
+  const contourIntervalRef = useRef(contourInterval);
+  const contourOpacityRef = useRef(contourOpacity);
   const needsRenderRef = useRef(true);
   const requestRenderRef = useRef<(() => void) | null>(null);
 
@@ -238,6 +260,18 @@ export function FieldHeatmap({
     needsRenderRef.current = true;
     requestRenderRef.current?.();
   }, [opacity]);
+
+  useEffect(() => {
+    contourIntervalRef.current = contourInterval;
+    needsRenderRef.current = true;
+    requestRenderRef.current?.();
+  }, [contourInterval]);
+
+  useEffect(() => {
+    contourOpacityRef.current = contourOpacity;
+    needsRenderRef.current = true;
+    requestRenderRef.current?.();
+  }, [contourOpacity]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -317,6 +351,8 @@ export function FieldHeatmap({
       context.uniform3fv(uniforms.charges, chargeData);
       context.uniform1f(uniforms.softening, 0.04);
       context.uniform1f(uniforms.potentialScale, 0.6);
+      context.uniform1f(uniforms.contourInterval, contourIntervalRef.current);
+      context.uniform1f(uniforms.contourOpacity, contourOpacityRef.current);
       opacityCurrentRef.current +=
         (opacityTargetRef.current - opacityCurrentRef.current) * 0.14;
       context.uniform1f(uniforms.opacity, opacityCurrentRef.current);

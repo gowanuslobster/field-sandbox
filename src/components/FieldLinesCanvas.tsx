@@ -23,6 +23,178 @@ type FieldLinesCanvasProps = {
   className?: string;
 };
 
+type FlowParticle = {
+  progress: number;
+  wrappedThisFrame: boolean;
+};
+
+type FlowPath = {
+  points: Vector2Like[];
+  cumulativeLengths: number[];
+  totalLength: number;
+  particles: FlowParticle[];
+};
+
+const PARTICLES_PER_LINE = 3;
+const FLOW_SPEED = 0.055;
+const MAX_FIELD_FOR_SPEED = 12;
+const TRAIL_LENGTH_PROGRESS = 0.034;
+const TRAIL_SEGMENTS = 4;
+const MAX_TRAIL_PIXEL_JUMP = 50;
+const ANIMATED_LINE_ALPHA = 0.15;
+const STATIC_LINE_ALPHA = 0.65;
+
+function nearestChargeSign(point: Vector2Like, charges: Charge[]): number {
+  let bestDistance = Number.POSITIVE_INFINITY;
+  let sign = 0;
+  for (const charge of charges) {
+    const dx = point.x - charge.position.x;
+    const dy = point.y - charge.position.y;
+    const distance = dx * dx + dy * dy;
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      sign = charge.value >= 0 ? 1 : -1;
+    }
+  }
+  return sign;
+}
+
+function orientLineForFlow(points: Vector2Like[], charges: Charge[]): Vector2Like[] {
+  if (points.length < 2) {
+    return points;
+  }
+  const start = points[0];
+  const end = points[points.length - 1];
+  const startSign = nearestChargeSign(start, charges);
+  const endSign = nearestChargeSign(end, charges);
+
+  if (startSign === 1 && endSign === -1) {
+    return points;
+  }
+  if (startSign === -1 && endSign === 1) {
+    return [...points].reverse();
+  }
+
+  const startPotential = potentialAtPoint(start, charges);
+  const endPotential = potentialAtPoint(end, charges);
+  if (startPotential >= endPotential) {
+    return points;
+  }
+  return [...points].reverse();
+}
+
+function buildFlowPaths(lines: Vector2D[][], charges: Charge[]): FlowPath[] {
+  const paths: FlowPath[] = [];
+  lines.forEach((rawLine, lineIndex) => {
+    if (rawLine.length < 2) {
+      return;
+    }
+    const points = orientLineForFlow(rawLine, charges);
+    if (points.length < 2) {
+      return;
+    }
+
+    const cumulativeLengths = [0];
+    let totalLength = 0;
+    for (let pointIndex = 0; pointIndex < points.length - 1; pointIndex += 1) {
+      const a = points[pointIndex];
+      const b = points[pointIndex + 1];
+      const segmentLength = Math.max(Math.hypot(b.x - a.x, b.y - a.y), 1e-5);
+      totalLength += segmentLength;
+      cumulativeLengths.push(totalLength);
+    }
+
+    if (totalLength <= 1e-5) {
+      return;
+    }
+    const phase = (lineIndex * 0.171) % 1;
+    const particles: FlowParticle[] = [];
+    for (let particleIndex = 0; particleIndex < PARTICLES_PER_LINE; particleIndex += 1) {
+      particles.push({
+        progress: (phase + particleIndex / PARTICLES_PER_LINE) % 1,
+        wrappedThisFrame: false,
+      });
+    }
+    paths.push({
+      points,
+      cumulativeLengths,
+      totalLength,
+      particles,
+    });
+  });
+
+  return paths;
+}
+
+function findSegmentIndex(cumulativeValues: number[], value: number): number {
+  let low = 0;
+  let high = cumulativeValues.length - 2;
+  while (low <= high) {
+    const mid = Math.floor((low + high) * 0.5);
+    if (value < cumulativeValues[mid]) {
+      high = mid - 1;
+      continue;
+    }
+    if (value >= cumulativeValues[mid + 1]) {
+      low = mid + 1;
+      continue;
+    }
+    return mid;
+  }
+  return Math.max(0, Math.min(cumulativeValues.length - 2, low));
+}
+
+function samplePathPosition(
+  path: FlowPath,
+  progress: number,
+  wrapProgress = true,
+): Vector2Like {
+  if (path.points.length < 2 || path.totalLength <= 1e-6) {
+    return path.points[0] ?? { x: 0, y: 0 };
+  }
+
+  const normalizedProgress = wrapProgress
+    ? ((progress % 1) + 1) % 1
+    : Math.min(1, Math.max(0, progress));
+  const safeProgress = Math.min(normalizedProgress, 1 - 1e-9);
+  const targetDistance = safeProgress * path.totalLength;
+  const segmentIndex = findSegmentIndex(path.cumulativeLengths, targetDistance);
+  if (segmentIndex >= path.points.length - 1) {
+    return path.points[path.points.length - 1];
+  }
+  const startDistance = path.cumulativeLengths[segmentIndex];
+  const endDistance = path.cumulativeLengths[segmentIndex + 1];
+  const span = Math.max(endDistance - startDistance, 1e-6);
+  const t = Math.min(1, Math.max(0, (targetDistance - startDistance) / span));
+  const start = path.points[segmentIndex];
+  const end = path.points[segmentIndex + 1];
+  return {
+    x: start.x + (end.x - start.x) * t,
+    y: start.y + (end.y - start.y) * t,
+  };
+}
+
+function updateFlowParticles(
+  flowPaths: FlowPath[],
+  charges: Charge[],
+  deltaSeconds: number,
+): void {
+  for (const path of flowPaths) {
+    for (const particle of path.particles) {
+      particle.wrappedThisFrame = false;
+      const worldPosition = samplePathPosition(path, particle.progress);
+      const localFieldMagnitude = Math.min(
+        electricFieldAtPoint(worldPosition, charges).magnitude(),
+        MAX_FIELD_FOR_SPEED,
+      );
+      const nextProgress =
+        particle.progress + FLOW_SPEED * localFieldMagnitude * deltaSeconds;
+      particle.wrappedThisFrame = nextProgress >= 1;
+      particle.progress = nextProgress % 1;
+    }
+  }
+}
+
 function mapPotentialToColor(potential: number, alpha: number): string {
   const normalized = Math.tanh(potential * 0.2);
   if (normalized >= 0) {
@@ -39,6 +211,7 @@ function drawPolyline(
   charges: Charge[],
   transform: WorldToScreenTransform,
   useGradient: boolean,
+  alpha: number,
 ): void {
   if (points.length < 2) {
     return;
@@ -56,11 +229,11 @@ function drawPolyline(
       lastPoint.x,
       lastPoint.y,
     );
-    gradient.addColorStop(0, mapPotentialToColor(startPotential, 0.72));
-    gradient.addColorStop(1, mapPotentialToColor(endPotential, 0.72));
+    gradient.addColorStop(0, mapPotentialToColor(startPotential, alpha));
+    gradient.addColorStop(1, mapPotentialToColor(endPotential, alpha));
     context.strokeStyle = gradient;
   } else {
-    context.strokeStyle = "rgba(198, 229, 255, 0.65)";
+    context.strokeStyle = `rgba(198, 229, 255, ${alpha})`;
   }
 
   context.beginPath();
@@ -160,6 +333,71 @@ function drawDirectionArrows(
   }
 }
 
+function drawFlowTrails(
+  context: CanvasRenderingContext2D,
+  flowPaths: FlowPath[],
+  transform: WorldToScreenTransform,
+): void {
+  for (const path of flowPaths) {
+    if (path.points.length < 2 || path.totalLength <= 1e-6) {
+      continue;
+    }
+
+    for (const particle of path.particles) {
+      if (particle.wrappedThisFrame) {
+        const resetHead = transformWorldPoint(
+          samplePathPosition(path, particle.progress, false),
+          transform,
+        );
+        context.fillStyle = "rgba(255, 250, 215, 0.98)";
+        context.beginPath();
+        context.arc(resetHead.x, resetHead.y, 1.6, 0, Math.PI * 2);
+        context.fill();
+        continue;
+      }
+
+      const trailStep = TRAIL_LENGTH_PROGRESS / TRAIL_SEGMENTS;
+      for (let trailIndex = 1; trailIndex <= TRAIL_SEGMENTS; trailIndex += 1) {
+        const currentSample = samplePathPosition(
+          path,
+          particle.progress - (trailIndex - 1) * trailStep,
+          false,
+        );
+        const previousSample = samplePathPosition(
+          path,
+          particle.progress - trailIndex * trailStep,
+          false,
+        );
+        const currentScreen = transformWorldPoint(currentSample, transform);
+        const previousScreen = transformWorldPoint(previousSample, transform);
+        const jumpDistance = Math.hypot(
+          currentScreen.x - previousScreen.x,
+          currentScreen.y - previousScreen.y,
+        );
+        if (jumpDistance > MAX_TRAIL_PIXEL_JUMP) {
+          continue;
+        }
+        const fade = 1 - (trailIndex - 1) / TRAIL_SEGMENTS;
+        const alpha = Math.pow(fade, 2.15) * 0.9;
+        context.strokeStyle = `rgba(255, 244, 180, ${alpha})`;
+        context.lineWidth = 0.8 + fade * 1.9;
+        context.beginPath();
+        context.moveTo(currentScreen.x, currentScreen.y);
+        context.lineTo(previousScreen.x, previousScreen.y);
+        context.stroke();
+      }
+      const head = transformWorldPoint(
+        samplePathPosition(path, particle.progress),
+        transform,
+      );
+      context.fillStyle = "rgba(255, 250, 215, 0.95)";
+      context.beginPath();
+      context.arc(head.x, head.y, 1.65, 0, Math.PI * 2);
+      context.fill();
+    }
+  }
+}
+
 export function FieldLinesCanvas({
   charges,
   bounds,
@@ -171,19 +409,23 @@ export function FieldLinesCanvas({
 }: FieldLinesCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const linesRef = useRef<Vector2D[][]>([]);
+  const flowPathsRef = useRef<FlowPath[]>([]);
   const chargesRef = useRef(charges);
   const boundsRef = useRef(bounds);
   const modeRef = useRef(mode);
   const useGradientRef = useRef(useGradient);
   const isSimulatingRef = useRef(isSimulating);
   const isDraggingRef = useRef(isDragging);
+  const frameTimeRef = useRef<number | null>(null);
   const lastBuildAtRef = useRef(0);
   const buildThrottleTimerRef = useRef<number | null>(null);
   const needsRenderRef = useRef(true);
   const requestRenderRef = useRef<(() => void) | null>(null);
 
   const rebuildFieldLines = useCallback(() => {
-    linesRef.current = buildFieldLines(chargesRef.current, boundsRef.current);
+    const rebuilt = buildFieldLines(chargesRef.current, boundsRef.current);
+    linesRef.current = rebuilt;
+    flowPathsRef.current = buildFlowPaths(rebuilt, chargesRef.current);
     lastBuildAtRef.current = performance.now();
     needsRenderRef.current = true;
     requestRenderRef.current?.();
@@ -254,8 +496,6 @@ export function FieldLinesCanvas({
     }
 
     let animationFrame: number | null = null;
-    let dashOffset = 0;
-    let previous = performance.now();
     const resizeObserver = new ResizeObserver((entries) => {
       const entry = entries[0];
       if (!entry) {
@@ -280,10 +520,11 @@ export function FieldLinesCanvas({
         return;
       }
 
-      if (modeRef.current === "animated_dashes") {
-        const dt = Math.max(0.001, (time - previous) / 1000);
-        previous = time;
-        dashOffset -= dt * 90;
+      const lastFrameTime = frameTimeRef.current ?? time;
+      const deltaSeconds = Math.max(0.001, Math.min(0.05, (time - lastFrameTime) / 1000));
+      frameTimeRef.current = time;
+      if (modeRef.current === "animated_dashes" && !isDraggingRef.current) {
+        updateFlowParticles(flowPathsRef.current, chargesRef.current, deltaSeconds);
       }
 
       const dpr = window.devicePixelRatio || 1;
@@ -302,17 +543,15 @@ export function FieldLinesCanvas({
       }
 
       context.lineWidth = 1.2;
-      if (modeRef.current === "animated_dashes") {
-        context.setLineDash([12, 11]);
-        context.lineDashOffset = dashOffset;
-      } else {
-        context.setLineDash([]);
-      }
       context.shadowColor = useGradientRef.current
         ? "rgba(188, 142, 255, 0.45)"
         : "rgba(112, 214, 255, 0.35)";
       context.shadowBlur = 8;
       const transform = getWorldToScreenTransform(boundsRef.current, width, height);
+      const lineAlpha =
+        modeRef.current === "animated_dashes"
+          ? ANIMATED_LINE_ALPHA
+          : STATIC_LINE_ALPHA;
 
       for (const line of linesRef.current) {
         drawPolyline(
@@ -321,10 +560,16 @@ export function FieldLinesCanvas({
           chargesRef.current,
           transform,
           useGradientRef.current,
+          lineAlpha,
         );
         if (modeRef.current === "static_arrows") {
           drawDirectionArrows(context, line, chargesRef.current, transform);
         }
+      }
+      if (modeRef.current === "animated_dashes" && !isDraggingRef.current) {
+        context.shadowColor = "rgba(255, 230, 160, 0.55)";
+        context.shadowBlur = 9;
+        drawFlowTrails(context, flowPathsRef.current, transform);
       }
 
       context.restore();
@@ -338,9 +583,7 @@ export function FieldLinesCanvas({
         animationFrame = null;
         drawFrame(time);
         needsRenderRef.current = false;
-        const keepRendering =
-          isSimulatingRef.current || modeRef.current === "animated_dashes";
-        if (keepRendering || needsRenderRef.current) {
+        if (isSimulatingRef.current || needsRenderRef.current) {
           scheduleRender();
         }
       });
@@ -354,6 +597,7 @@ export function FieldLinesCanvas({
 
     return () => {
       requestRenderRef.current = null;
+      frameTimeRef.current = null;
       if (animationFrame !== null) {
         window.cancelAnimationFrame(animationFrame);
       }
