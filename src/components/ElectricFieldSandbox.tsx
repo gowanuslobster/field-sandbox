@@ -96,6 +96,10 @@ export function ElectricFieldSandbox() {
   const [showEquipotentialLines, setShowEquipotentialLines] = useState(false);
   const [fieldLineMode, setFieldLineMode] =
     useState<FieldLineRenderMode>("static_arrows");
+  const [isDraggingCharge, setIsDraggingCharge] = useState(false);
+  const [isSimulating, setIsSimulating] = useState(
+    fieldLineMode === "animated_dashes",
+  );
 
   const panFromClientDelta = useCallback((clientX: number, clientY: number) => {
     const activePan = panStateRef.current;
@@ -258,6 +262,8 @@ export function ElectricFieldSandbox() {
 
   const startDrag = (chargeId: string) => {
     dragStateRef.current = { chargeId };
+    setIsDraggingCharge(true);
+    setIsSimulating(true);
     setSelectedChargeId(chargeId);
     setMode("select");
   };
@@ -314,6 +320,8 @@ export function ElectricFieldSandbox() {
     const onPointerUp = () => {
       dragStateRef.current = null;
       panStateRef.current = null;
+      setIsDraggingCharge(false);
+      setIsSimulating(fieldLineMode === "animated_dashes");
     };
 
     window.addEventListener("pointermove", onPointerMove);
@@ -322,7 +330,7 @@ export function ElectricFieldSandbox() {
       window.removeEventListener("pointermove", onPointerMove);
       window.removeEventListener("pointerup", onPointerUp);
     };
-  }, [getWorldFromClientPoint, panFromClientDelta]);
+  }, [fieldLineMode, getWorldFromClientPoint, panFromClientDelta]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -517,7 +525,13 @@ export function ElectricFieldSandbox() {
         <div className="mt-2 space-y-2">
           <button
             type="button"
-            onClick={() => setFieldLineMode((current) => nextFieldLineMode(current))}
+            onClick={() =>
+              setFieldLineMode((current) => {
+                const nextMode = nextFieldLineMode(current);
+                setIsSimulating(isDraggingCharge || nextMode === "animated_dashes");
+                return nextMode;
+              })
+            }
             className={`flex w-full items-center justify-between rounded-md px-3 py-2 text-sm transition-all duration-200 ${
               fieldLineMode === "animated_dashes"
                 ? "bg-violet-300/85 text-black shadow-[0_0_14px_rgba(196,181,253,0.45)]"
@@ -622,6 +636,7 @@ export function ElectricFieldSandbox() {
           zoom={zoom}
           offsetX={offsetX}
           offsetY={offsetY}
+          isSimulating={isSimulating}
           opacity={showHeatmap ? 0.9 : 0}
           className="pointer-events-none absolute inset-0 h-full w-full"
         />
@@ -635,6 +650,8 @@ export function ElectricFieldSandbox() {
         <FieldLinesCanvas
           charges={charges}
           bounds={viewBounds}
+          isSimulating={isSimulating}
+          isDragging={isDraggingCharge}
           useGradient={showFieldLineGradient}
           mode={fieldLineMode}
           className="pointer-events-none absolute inset-0 h-full w-full"
