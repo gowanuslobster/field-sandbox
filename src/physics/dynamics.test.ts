@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { symplecticEulerCromerParticleStep, toTestParticle } from "@/physics/dynamics";
+import {
+  SIMULATION_SPEED,
+  symplecticEulerCromerParticleStep,
+  toTestParticle,
+} from "@/physics/dynamics";
 import { electricFieldAtPoint } from "@/physics/electrostatics";
 import type { Charge } from "@/physics/types";
 
@@ -13,10 +17,11 @@ describe("symplecticEulerCromerParticleStep", () => {
     });
 
     const stepped = symplecticEulerCromerParticleStep(particle, [], 0.5);
+    const effectiveDt = 0.5 * SIMULATION_SPEED;
     expect(stepped.vel.x).toBeCloseTo(0.3, 8);
     expect(stepped.vel.y).toBeCloseTo(-0.4, 8);
-    expect(stepped.pos.x).toBeCloseTo(0.35, 8);
-    expect(stepped.pos.y).toBeCloseTo(-0.3, 8);
+    expect(stepped.pos.x).toBeCloseTo(0.2 + 0.3 * effectiveDt, 8);
+    expect(stepped.pos.y).toBeCloseTo(-0.1 + -0.4 * effectiveDt, 8);
   });
 
   it("updates velocity first, then position using new velocity", () => {
@@ -33,12 +38,13 @@ describe("symplecticEulerCromerParticleStep", () => {
     const field = electricFieldAtPoint(particle.pos, charges);
     const ax = field.x * (particle.charge / particle.mass);
     const ay = field.y * (particle.charge / particle.mass);
+    const effectiveDt = dt * SIMULATION_SPEED;
 
     const stepped = symplecticEulerCromerParticleStep(particle, charges, dt);
-    const expectedVx = particle.vel.x + ax * dt;
-    const expectedVy = particle.vel.y + ay * dt;
-    const expectedPx = particle.pos.x + expectedVx * dt;
-    const expectedPy = particle.pos.y + expectedVy * dt;
+    const expectedVx = particle.vel.x + ax * effectiveDt;
+    const expectedVy = particle.vel.y + ay * effectiveDt;
+    const expectedPx = particle.pos.x + expectedVx * effectiveDt;
+    const expectedPy = particle.pos.y + expectedVy * effectiveDt;
 
     expect(stepped.vel.x).toBeCloseTo(expectedVx, 8);
     expect(stepped.vel.y).toBeCloseTo(expectedVy, 8);

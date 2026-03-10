@@ -2,6 +2,10 @@ import { calculateFieldAt } from "@/physics/electrostatics";
 import type { Charge } from "@/physics/types";
 import { Vector2D, type Vector2Like } from "@/physics/vector2d";
 
+export const SIMULATION_SPEED = 2.2;
+export const DEFAULT_TEST_PARTICLE_CHARGE = 10;
+export const DEFAULT_TEST_PARTICLE_MASS = 1;
+
 export type TestParticle = {
   pos: Vector2D;
   vel: Vector2D;
@@ -27,11 +31,12 @@ export function symplecticEulerCromerParticleStep(
   charges: Charge[],
   dt: number,
 ): TestParticle {
+  const effectiveDt = dt * SIMULATION_SPEED;
   const clampedMass = Math.max(1e-6, particle.mass);
   const field = calculateFieldAt(particle.pos.x, particle.pos.y, charges);
   const acceleration = field.scale(particle.charge / clampedMass);
-  const nextVelocity = particle.vel.add(acceleration.scale(dt));
-  const nextPosition = particle.pos.add(nextVelocity.scale(dt));
+  const nextVelocity = particle.vel.add(acceleration.scale(effectiveDt));
+  const nextPosition = particle.pos.add(nextVelocity.scale(effectiveDt));
 
   return {
     ...particle,
