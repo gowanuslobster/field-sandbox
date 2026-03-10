@@ -1,7 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useRef } from "react";
-import { symplecticEulerCromerParticleStep, toTestParticle } from "@/physics/dynamics";
+import {
+  DEFAULT_TEST_PARTICLE_CHARGE,
+  DEFAULT_TEST_PARTICLE_MASS,
+  symplecticEulerCromerParticleStep,
+  toTestParticle,
+} from "@/physics/dynamics";
 import type { Charge, WorldBounds } from "@/physics/types";
 import { Vector2D, type Vector2Like } from "@/physics/vector2d";
 import {
@@ -9,18 +14,31 @@ import {
   transformWorldPoint,
 } from "@/physics/world-space";
 
-type SpawnParticle = (position: Vector2Like) => void;
+type SpawnParticle = (
+  position: Vector2Like,
+) => { id: string; pos: Vector2Like; vel: Vector2Like };
 type ClearParticles = () => void;
+type PickParticle = (
+  worldPosition: Vector2Like,
+  radiusWorld: number,
+) => { id: string; pos: Vector2Like; vel: Vector2Like } | null;
+type SetParticleFrozen = (id: string, frozen: boolean) => void;
+type LaunchParticle = (id: string, velocity: Vector2Like) => void;
 
-type ParticlesController = {
+export type ParticlesController = {
   spawn: SpawnParticle;
   clear: ClearParticles;
+  pickAt: PickParticle;
+  setFrozen: SetParticleFrozen;
+  launch: LaunchParticle;
 };
 
 type ParticleSimulationState = {
   id: string;
   particle: ReturnType<typeof toTestParticle>;
   history: Vector2D[];
+  frozen: boolean;
+  unfreezeAtMs: number | null;
 };
 
 type ParticlesCanvasProps = {
@@ -34,9 +52,9 @@ type ParticlesCanvasProps = {
 };
 
 const MAX_HISTORY_POINTS = 50;
-const PARTICLE_CHARGE = 0.22;
-const PARTICLE_MASS = 1;
-const MAX_PARTICLE_SPEED = 2.2;
+const MAX_PARTICLE_SPEED = 3.8;
+const VELOCITY_RESET_TRAIL_THRESHOLD = 1.2;
+const SPAWN_FREEZE_MS = 500;
 
 function inBounds(point: Vector2Like, bounds: WorldBounds): boolean {
   return (
@@ -80,19 +98,28 @@ export function ParticlesCanvas({
   const spawnParticle = useCallback<SpawnParticle>(
     (position) => {
       const vectorPosition = Vector2D.from(position);
-      particlesRef.current.push({
-        id: `tp-${idCounterRef.current++}`,
+      const nextId = `tp-${idCounterRef.current++}`;
+      const nextState: ParticleSimulationState = {
+        id: nextId,
         particle: toTestParticle({
           pos: vectorPosition,
           vel: new Vector2D(0, 0),
-          mass: PARTICLE_MASS,
-          charge: PARTICLE_CHARGE,
+          mass: DEFAULT_TEST_PARTICLE_MASS,
+          charge: DEFAULT_TEST_PARTICLE_CHARGE,
         }),
         history: [vectorPosition],
-      });
+        frozen: true,
+        unfreezeAtMs: performance.now() + SPAWN_FREEZE_MS,
+      };
+      particlesRef.current.push(nextState);
       emitParticleCount();
       needsRenderRef.current = true;
       requestRenderRef.current?.();
+      return {
+        id: nextState.id,
+        pos: nextState.particle.pos,
+        vel: nextState.particle.vel,
+      };
     },
     [emitParticleCount],
   );
@@ -104,13 +131,97 @@ export function ParticlesCanvas({
     requestRenderRef.current?.();
   }, [emitParticleCount]);
 
+  const pickAt = useCallback<PickParticle>((worldPosition, radiusWorld) => {
+    const radiusSquared = radiusWorld * radiusWorld;
+    let bestMatch: {
+      id: string;
+      pos: Vector2Like;
+      vel: Vector2Like;
+      distanceSquared: number;
+    } | null = null;
+    for (let index = particlesRef.current.length - 1; index >= 0; index -= 1) {
+      const state = particlesRef.current[index];
+      const dx = state.particle.pos.x - worldPosition.x;
+      const dy = state.particle.pos.y - worldPosition.y;
+      const distanceSquared = dx * dx + dy * dy;
+      if (
+        distanceSquared <= radiusSquared &&
+        (!bestMatch || distanceSquared < bestMatch.distanceSquared)
+      ) {
+        bestMatch = {
+          id: state.id,
+          pos: state.particle.pos,
+          vel: state.particle.vel,
+          distanceSquared,
+        };
+      }
+    }
+    if (!bestMatch) {
+      return null;
+    }
+    return {
+      id: bestMatch.id,
+      pos: bestMatch.pos,
+      vel: bestMatch.vel,
+    };
+  }, []);
+
+  const setFrozen = useCallback<SetParticleFrozen>((id, frozen) => {
+    particlesRef.current = particlesRef.current.map((state) =>
+      state.id === id
+        ? {
+            ...state,
+            frozen,
+            unfreezeAtMs: frozen ? null : state.unfreezeAtMs,
+          }
+        : state,
+    );
+    needsRenderRef.current = true;
+    requestRenderRef.current?.();
+  }, []);
+
+  const launchParticle = useCallback<LaunchParticle>((id, velocity) => {
+    particlesRef.current = particlesRef.current.map((state) => {
+      if (state.id !== id) {
+        return state;
+      }
+      const velocityVector = Vector2D.from(velocity);
+      const velocityDelta = velocityVector.subtract(state.particle.vel).magnitude();
+      return {
+        ...state,
+        frozen: false,
+        unfreezeAtMs: null,
+        particle: {
+          ...state.particle,
+          vel: velocityVector,
+        },
+        history:
+          velocityDelta > VELOCITY_RESET_TRAIL_THRESHOLD
+            ? [state.particle.pos]
+            : state.history,
+      };
+    });
+    needsRenderRef.current = true;
+    requestRenderRef.current?.();
+  }, []);
+
   useEffect(() => {
     onControllerReady?.({
       spawn: spawnParticle,
       clear: clearParticles,
+      pickAt,
+      setFrozen,
+      launch: launchParticle,
     });
     return () => onControllerReady?.(null);
-  }, [clearParticles, onControllerReady, spawnParticle]);
+  }, [
+    clearParticles,
+    launchParticle,
+    onControllerReady,
+    pickAt,
+    setFrozen,
+    spawnParticle,
+  ]);
 
   useEffect(() => {
     chargesRef.current = charges;
@@ -164,15 +275,25 @@ export function ParticlesCanvas({
 
     resizeObserver.observe(canvas);
 
-    const simulate = (dt: number) => {
+    const simulate = (dt: number, nowMs: number) => {
       if (particlesRef.current.length === 0) {
         return;
       }
 
       const nextParticles: ParticleSimulationState[] = [];
       for (const state of particlesRef.current) {
+        const thawedState =
+          state.frozen &&
+          state.unfreezeAtMs !== null &&
+          nowMs >= state.unfreezeAtMs
+            ? { ...state, frozen: false, unfreezeAtMs: null }
+            : state;
+        if (thawedState.frozen) {
+          nextParticles.push(thawedState);
+          continue;
+        }
         const stepped = symplecticEulerCromerParticleStep(
-          state.particle,
+          thawedState.particle,
           chargesRef.current,
           dt,
         );
@@ -187,11 +308,11 @@ export function ParticlesCanvas({
         }
 
         const nextHistory =
-          state.history.length >= MAX_HISTORY_POINTS
-            ? [...state.history.slice(1), nextParticle.pos]
-            : [...state.history, nextParticle.pos];
+          thawedState.history.length >= MAX_HISTORY_POINTS
+            ? [...thawedState.history.slice(1), nextParticle.pos]
+            : [...thawedState.history, nextParticle.pos];
         nextParticles.push({
-          ...state,
+          ...thawedState,
           particle: nextParticle,
           history: nextHistory,
         });
@@ -264,7 +385,7 @@ export function ParticlesCanvas({
         const dt = Math.max(0.001, Math.min(0.03, (time - previousTime) / 1000));
 
         if (isSimulatingRef.current && particlesRef.current.length > 0) {
-          simulate(dt);
+          simulate(dt, time);
           needsRenderRef.current = true;
         }
         draw();

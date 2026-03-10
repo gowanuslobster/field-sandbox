@@ -14,7 +14,10 @@ import {
   FieldLinesCanvas,
   type FieldLineRenderMode,
 } from "@/components/FieldLinesCanvas";
-import { ParticlesCanvas } from "@/components/ParticlesCanvas";
+import {
+  ParticlesCanvas,
+  type ParticlesController,
+} from "@/components/ParticlesCanvas";
 import { VectorFieldCanvas } from "@/components/VectorFieldCanvas";
 import { calculateFieldAt, potentialAtPoint } from "@/physics/electrostatics";
 import type { Charge, WorldBounds } from "@/physics/types";
@@ -26,10 +29,17 @@ import {
 } from "@/physics/world-space";
 
 type Mode = "select" | "add_positive" | "add_negative" | "drop_test_charge";
+type SlingshotPreview = {
+  particleId: string;
+  origin: Vector2Like;
+  cursor: Vector2Like;
+  plannedVelocity: Vector2Like;
+};
 
 const CHARGE_RADIUS_PX = 13;
 const MIN_ZOOM = 0.1;
 const MAX_ZOOM = 6.5;
+const SLINGSHOT_DRAG_TO_VELOCITY = 7.5;
 
 const INITIAL_CHARGES: Charge[] = [
   { id: "q1", position: { x: -0.72, y: 0 }, value: 1 },
@@ -66,9 +76,28 @@ function toChargeClass(value: number, selected: boolean): string {
 export function ElectricFieldSandbox() {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const dragStateRef = useRef<{ chargeId: string } | null>(null);
+  const slingshotRef = useRef<{ particleId: string; origin: Vector2Like } | null>(
+    null,
+  );
+  const slingshotPreviewRef = useRef<SlingshotPreview | null>(null);
   const probeDragRef = useRef(false);
-  const particleSpawnerRef = useRef<((position: Vector2Like) => void) | null>(null);
+  const particleSpawnerRef = useRef<
+    ((position: Vector2Like) => { id: string; pos: Vector2Like; vel: Vector2Like }) | null
+  >(null);
   const particleClearRef = useRef<(() => void) | null>(null);
+  const particlePickRef = useRef<
+    ((worldPosition: Vector2Like, radiusWorld: number) => {
+      id: string;
+      pos: Vector2Like;
+      vel: Vector2Like;
+    } | null) | null
+  >(null);
+  const particleFreezeRef = useRef<((id: string, frozen: boolean) => void) | null>(
+    null,
+  );
+  const particleLaunchRef = useRef<
+    ((id: string, velocity: Vector2Like) => void) | null
+  >(null);
   const panStateRef = useRef<{
     startX: number;
     startY: number;
@@ -107,17 +136,15 @@ export function ElectricFieldSandbox() {
     x: -0.18,
     y: 0.18,
   });
+  const [slingshotPreview, setSlingshotPreview] =
+    useState<SlingshotPreview | null>(null);
   const handleParticleControllerReady = useCallback(
-    (
-      controller:
-        | {
-            spawn: (position: Vector2Like) => void;
-            clear: () => void;
-          }
-        | null,
-    ) => {
+    (controller: ParticlesController | null) => {
       particleSpawnerRef.current = controller?.spawn ?? null;
       particleClearRef.current = controller?.clear ?? null;
+      particlePickRef.current = controller?.pickAt ?? null;
+      particleFreezeRef.current = controller?.setFrozen ?? null;
+      particleLaunchRef.current = controller?.launch ?? null;
     },
     [],
   );
@@ -320,7 +347,7 @@ export function ElectricFieldSandbox() {
 
   useEffect(() => {
     const onPointerMove = (event: PointerEvent) => {
-      if (!panStateRef.current && !dragStateRef.current) {
+      if (!panStateRef.current && !dragStateRef.current && !slingshotRef.current) {
         const wantsRightPan = (event.buttons & 2) === 2;
         const wantsSpacePan =
           isSpacePressedRef.current && (event.buttons & 1) === 1;
@@ -340,6 +367,31 @@ export function ElectricFieldSandbox() {
 
       const world = getWorldFromClientPoint(event.clientX, event.clientY);
       if (!world) {
+        return;
+      }
+
+      if (slingshotRef.current) {
+        const origin = slingshotRef.current.origin;
+        const dragVector = {
+          x: world.x - origin.x,
+          y: world.y - origin.y,
+        };
+        const plannedVelocity = {
+          x: dragVector.x * SLINGSHOT_DRAG_TO_VELOCITY,
+          y: dragVector.y * SLINGSHOT_DRAG_TO_VELOCITY,
+        };
+        setSlingshotPreview({
+          particleId: slingshotRef.current.particleId,
+          origin,
+          cursor: world,
+          plannedVelocity,
+        });
+        slingshotPreviewRef.current = {
+          particleId: slingshotRef.current.particleId,
+          origin,
+          cursor: world,
+          plannedVelocity,
+        };
         return;
       }
 
@@ -363,6 +415,20 @@ export function ElectricFieldSandbox() {
     };
 
     const onPointerUp = () => {
+      if (slingshotRef.current) {
+        const particleId = slingshotRef.current.particleId;
+        if (slingshotPreviewRef.current) {
+          particleLaunchRef.current?.(
+            particleId,
+            slingshotPreviewRef.current.plannedVelocity,
+          );
+        } else {
+          particleFreezeRef.current?.(particleId, false);
+        }
+        slingshotRef.current = null;
+        setSlingshotPreview(null);
+        slingshotPreviewRef.current = null;
+      }
       dragStateRef.current = null;
       panStateRef.current = null;
       probeDragRef.current = false;
@@ -407,6 +473,33 @@ export function ElectricFieldSandbox() {
   }, [removeSelectedCharge]);
 
   const handleCanvasPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.button === 0 && mode !== "add_positive" && mode !== "add_negative") {
+      const world = getWorldFromClientPoint(event.clientX, event.clientY);
+      if (world) {
+        const worldPerPixel =
+          (viewBounds.maxX - viewBounds.minX) / Math.max(size.width, 1);
+        const hit = particlePickRef.current?.(world, worldPerPixel * 60);
+        if (hit) {
+          event.preventDefault();
+          event.stopPropagation();
+          slingshotRef.current = {
+            particleId: hit.id,
+            origin: hit.pos,
+          };
+          particleFreezeRef.current?.(hit.id, true);
+          const preview: SlingshotPreview = {
+            particleId: hit.id,
+            origin: hit.pos,
+            cursor: world,
+            plannedVelocity: { x: 0, y: 0 },
+          };
+          slingshotPreviewRef.current = preview;
+          setSlingshotPreview(preview);
+          return;
+        }
+      }
+    }
+
     const shouldPan =
       event.button === 2 ||
       (event.button === 0 && (isSpacePressedRef.current || mode === "select"));
@@ -432,7 +525,21 @@ export function ElectricFieldSandbox() {
     }
 
     if (mode === "drop_test_charge") {
-      particleSpawnerRef.current?.(world);
+      const spawned = particleSpawnerRef.current?.(world);
+      if (spawned) {
+        slingshotRef.current = {
+          particleId: spawned.id,
+          origin: spawned.pos,
+        };
+        const preview: SlingshotPreview = {
+          particleId: spawned.id,
+          origin: spawned.pos,
+          cursor: world,
+          plannedVelocity: { x: 0, y: 0 },
+        };
+        slingshotPreviewRef.current = preview;
+        setSlingshotPreview(preview);
+      }
       return;
     }
 
@@ -489,6 +596,29 @@ export function ElectricFieldSandbox() {
   const probeArrowUx = probeArrowLength > 1e-6 ? probeArrowDx / probeArrowLength : 0;
   const probeArrowUy = probeArrowLength > 1e-6 ? probeArrowDy / probeArrowLength : 0;
   const probeHeadSize = 7;
+  const slingshotOriginScreen = slingshotPreview
+    ? worldToScreen(slingshotPreview.origin, viewBounds, size.width, size.height)
+    : null;
+  const slingshotCursorScreen = slingshotPreview
+    ? worldToScreen(slingshotPreview.cursor, viewBounds, size.width, size.height)
+    : null;
+  const slingshotDx =
+    slingshotOriginScreen && slingshotCursorScreen
+      ? slingshotCursorScreen.x - slingshotOriginScreen.x
+      : 0;
+  const slingshotDy =
+    slingshotOriginScreen && slingshotCursorScreen
+      ? slingshotCursorScreen.y - slingshotOriginScreen.y
+      : 0;
+  const slingshotLength = Math.hypot(slingshotDx, slingshotDy);
+  const slingshotUx = slingshotLength > 1e-6 ? slingshotDx / slingshotLength : 0;
+  const slingshotUy = slingshotLength > 1e-6 ? slingshotDy / slingshotLength : 0;
+  const plannedVelocityMagnitude = slingshotPreview
+    ? Math.hypot(
+        slingshotPreview.plannedVelocity.x,
+        slingshotPreview.plannedVelocity.y,
+      )
+    : 0;
 
   return (
     <section className="h-dvh w-full bg-[#0F0F0F] text-zinc-100">
@@ -556,6 +686,9 @@ export function ElectricFieldSandbox() {
           <button
             type="button"
             onClick={() => {
+              slingshotRef.current = null;
+              slingshotPreviewRef.current = null;
+              setSlingshotPreview(null);
               particleClearRef.current?.();
               setMode("select");
             }}
@@ -746,7 +879,8 @@ export function ElectricFieldSandbox() {
           <p className="text-zinc-300">Cursor potential V ≈ {cursorPotential.toFixed(3)}</p>
           <p className="text-zinc-300">Test Particles: {testParticleCount}</p>
           <p className="mt-1 text-zinc-400">
-            Tip: Wheel to zoom; pan with Select-drag, right-drag, or Space-drag.
+            Tip: Wheel to zoom; pan with Select-drag/right-drag/Space-drag; drag a
+            test particle to slingshot.
           </p>
         </div>
       </div>
@@ -807,6 +941,72 @@ export function ElectricFieldSandbox() {
           className="pointer-events-none absolute inset-0 h-full w-full"
         />
         <svg className="pointer-events-none absolute inset-0 h-full w-full">
+          {slingshotOriginScreen && slingshotCursorScreen ? (
+            <>
+              <line
+                x1={slingshotOriginScreen.x}
+                y1={slingshotOriginScreen.y}
+                x2={slingshotCursorScreen.x}
+                y2={slingshotCursorScreen.y}
+                stroke="rgba(255, 247, 122, 0.98)"
+                strokeWidth="3.5"
+                strokeLinecap="round"
+              />
+              <line
+                x1={slingshotCursorScreen.x}
+                y1={slingshotCursorScreen.y}
+                x2={
+                  slingshotCursorScreen.x -
+                  slingshotUx * 9 -
+                  slingshotUy * 5
+                }
+                y2={
+                  slingshotCursorScreen.y -
+                  slingshotUy * 9 +
+                  slingshotUx * 5
+                }
+                stroke="rgba(255, 247, 122, 0.98)"
+                strokeWidth="3"
+                strokeLinecap="round"
+              />
+              <line
+                x1={slingshotCursorScreen.x}
+                y1={slingshotCursorScreen.y}
+                x2={
+                  slingshotCursorScreen.x -
+                  slingshotUx * 9 +
+                  slingshotUy * 5
+                }
+                y2={
+                  slingshotCursorScreen.y -
+                  slingshotUy * 9 -
+                  slingshotUx * 5
+                }
+                stroke="rgba(255, 247, 122, 0.98)"
+                strokeWidth="3"
+                strokeLinecap="round"
+              />
+              <rect
+                x={(slingshotOriginScreen.x + slingshotCursorScreen.x) * 0.5 + 4}
+                y={(slingshotOriginScreen.y + slingshotCursorScreen.y) * 0.5 - 22}
+                width={90}
+                height={18}
+                rx={4}
+                fill="rgba(2, 10, 16, 0.75)"
+                stroke="rgba(255, 247, 122, 0.55)"
+                strokeWidth="1"
+              />
+              <text
+                x={(slingshotOriginScreen.x + slingshotCursorScreen.x) * 0.5 + 10}
+                y={(slingshotOriginScreen.y + slingshotCursorScreen.y) * 0.5 - 8}
+                fill="rgba(255, 252, 198, 0.98)"
+                fontSize="12"
+                fontWeight="700"
+              >
+                v: {plannedVelocityMagnitude.toFixed(2)}
+              </text>
+            </>
+          ) : null}
           <line
             x1={probeScreen.x}
             y1={probeScreen.y}
