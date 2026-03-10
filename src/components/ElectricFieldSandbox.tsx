@@ -68,6 +68,7 @@ export function ElectricFieldSandbox() {
   const dragStateRef = useRef<{ chargeId: string } | null>(null);
   const probeDragRef = useRef(false);
   const particleSpawnerRef = useRef<((position: Vector2Like) => void) | null>(null);
+  const particleClearRef = useRef<(() => void) | null>(null);
   const panStateRef = useRef<{
     startX: number;
     startY: number;
@@ -106,9 +107,17 @@ export function ElectricFieldSandbox() {
     x: -0.18,
     y: 0.18,
   });
-  const handleParticleSpawnerReady = useCallback(
-    (spawner: ((position: Vector2Like) => void) | null) => {
-      particleSpawnerRef.current = spawner;
+  const handleParticleControllerReady = useCallback(
+    (
+      controller:
+        | {
+            spawn: (position: Vector2Like) => void;
+            clear: () => void;
+          }
+        | null,
+    ) => {
+      particleSpawnerRef.current = controller?.spawn ?? null;
+      particleClearRef.current = controller?.clear ?? null;
     },
     [],
   );
@@ -174,6 +183,10 @@ export function ElectricFieldSandbox() {
   const contourInterval = useMemo(
     () => 1 / Math.max(0.35, contourDensity),
     [contourDensity],
+  );
+  const particleDespawnBounds = useMemo(
+    () => getViewBounds(baseBounds, { zoom: MIN_ZOOM, offsetX, offsetY }),
+    [baseBounds, offsetX, offsetY],
   );
   const isSimulating =
     isDraggingCharge ||
@@ -540,6 +553,16 @@ export function ElectricFieldSandbox() {
           >
             + Drop Test Charge
           </button>
+          <button
+            type="button"
+            onClick={() => {
+              particleClearRef.current?.();
+              setMode("select");
+            }}
+            className="col-span-2 rounded-md bg-cyan-300/20 px-3 py-2 text-sm text-cyan-100 transition-colors duration-200 hover:bg-cyan-300/35"
+          >
+            Clear Test Charges
+          </button>
         </div>
         {selectedCharge ? (
           <div className="mt-3 rounded-lg border border-cyan-200/20 bg-cyan-950/25 px-3 py-2">
@@ -777,8 +800,9 @@ export function ElectricFieldSandbox() {
         <ParticlesCanvas
           charges={charges}
           bounds={viewBounds}
+          despawnBounds={particleDespawnBounds}
           isSimulating={isSimulating}
-          onSpawnerReady={handleParticleSpawnerReady}
+          onControllerReady={handleParticleControllerReady}
           onParticleCountChange={setTestParticleCount}
           className="pointer-events-none absolute inset-0 h-full w-full"
         />

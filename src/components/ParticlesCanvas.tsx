@@ -10,6 +10,12 @@ import {
 } from "@/physics/world-space";
 
 type SpawnParticle = (position: Vector2Like) => void;
+type ClearParticles = () => void;
+
+type ParticlesController = {
+  spawn: SpawnParticle;
+  clear: ClearParticles;
+};
 
 type ParticleSimulationState = {
   id: string;
@@ -20,9 +26,10 @@ type ParticleSimulationState = {
 type ParticlesCanvasProps = {
   charges: Charge[];
   bounds: WorldBounds;
+  despawnBounds: WorldBounds;
   isSimulating: boolean;
   className?: string;
-  onSpawnerReady?: (spawn: SpawnParticle | null) => void;
+  onControllerReady?: (controller: ParticlesController | null) => void;
   onParticleCountChange?: (count: number) => void;
 };
 
@@ -40,33 +47,19 @@ function inBounds(point: Vector2Like, bounds: WorldBounds): boolean {
   );
 }
 
-function wrapToBounds(point: Vector2Like, bounds: WorldBounds): Vector2D {
-  let x = point.x;
-  let y = point.y;
-  if (x < bounds.minX) {
-    x = bounds.maxX;
-  } else if (x > bounds.maxX) {
-    x = bounds.minX;
-  }
-  if (y < bounds.minY) {
-    y = bounds.maxY;
-  } else if (y > bounds.maxY) {
-    y = bounds.minY;
-  }
-  return new Vector2D(x, y);
-}
-
 export function ParticlesCanvas({
   charges,
   bounds,
+  despawnBounds,
   isSimulating,
   className,
-  onSpawnerReady,
+  onControllerReady,
   onParticleCountChange,
 }: ParticlesCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const chargesRef = useRef(charges);
   const boundsRef = useRef(bounds);
+  const despawnBoundsRef = useRef(despawnBounds);
   const isSimulatingRef = useRef(isSimulating);
   const particlesRef = useRef<ParticleSimulationState[]>([]);
   const frameTimeRef = useRef<number | null>(null);
@@ -104,10 +97,20 @@ export function ParticlesCanvas({
     [emitParticleCount],
   );
 
+  const clearParticles = useCallback<ClearParticles>(() => {
+    particlesRef.current = [];
+    emitParticleCount();
+    needsRenderRef.current = true;
+    requestRenderRef.current?.();
+  }, [emitParticleCount]);
+
   useEffect(() => {
-    onSpawnerReady?.(spawnParticle);
-    return () => onSpawnerReady?.(null);
-  }, [onSpawnerReady, spawnParticle]);
+    onControllerReady?.({
+      spawn: spawnParticle,
+      clear: clearParticles,
+    });
+    return () => onControllerReady?.(null);
+  }, [clearParticles, onControllerReady, spawnParticle]);
 
   useEffect(() => {
     chargesRef.current = charges;
@@ -120,6 +123,12 @@ export function ParticlesCanvas({
     needsRenderRef.current = true;
     requestRenderRef.current?.();
   }, [bounds]);
+
+  useEffect(() => {
+    despawnBoundsRef.current = despawnBounds;
+    needsRenderRef.current = true;
+    requestRenderRef.current?.();
+  }, [despawnBounds]);
 
   useEffect(() => {
     isSimulatingRef.current = isSimulating;
@@ -173,17 +182,17 @@ export function ParticlesCanvas({
             ? stepped.vel.scale(MAX_PARTICLE_SPEED / speed)
             : stepped.vel;
         const nextParticle = { ...stepped, vel: cappedVelocity };
-        const wrappedPosition = wrapToBounds(nextParticle.pos, boundsRef.current);
-        const wrapped = !inBounds(nextParticle.pos, boundsRef.current);
+        if (!inBounds(nextParticle.pos, despawnBoundsRef.current)) {
+          continue;
+        }
 
-        const nextHistory = wrapped
-          ? [wrappedPosition]
-          : state.history.length >= MAX_HISTORY_POINTS
-            ? [...state.history.slice(1), wrappedPosition]
-            : [...state.history, wrappedPosition];
+        const nextHistory =
+          state.history.length >= MAX_HISTORY_POINTS
+            ? [...state.history.slice(1), nextParticle.pos]
+            : [...state.history, nextParticle.pos];
         nextParticles.push({
           ...state,
-          particle: { ...nextParticle, pos: wrappedPosition },
+          particle: nextParticle,
           history: nextHistory,
         });
       }
