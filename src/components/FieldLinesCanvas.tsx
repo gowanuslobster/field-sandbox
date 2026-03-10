@@ -115,8 +115,14 @@ function drawDirectionArrows(
         };
         const field = electricFieldAtPoint(worldPoint, charges);
         const direction = field.normalized();
-        const dirX = direction.x;
-        const dirY = -direction.y;
+        const dirScreenX = transform.a * direction.x;
+        const dirScreenY = transform.d * direction.y;
+        const dirMagnitude = Math.hypot(dirScreenX, dirScreenY);
+        if (dirMagnitude < 1e-6) {
+          continue;
+        }
+        const dirX = dirScreenX / dirMagnitude;
+        const dirY = dirScreenY / dirMagnitude;
         const arrowLength = 9;
         const headLength = 4.5;
         const angle = Math.atan2(dirY, dirX);
