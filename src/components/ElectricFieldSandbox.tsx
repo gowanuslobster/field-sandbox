@@ -1,7 +1,6 @@
 "use client";
 
 import {
-  type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
   type WheelEvent as ReactWheelEvent,
   useCallback,
@@ -74,6 +73,7 @@ export function ElectricFieldSandbox() {
   } | null>(null);
   const isSpacePressedRef = useRef(false);
   const cameraRef = useRef({ offsetX: 0, offsetY: 0 });
+  const zoomRef = useRef(1);
   const chargesRef = useRef(INITIAL_CHARGES);
   const boundsRef = useRef<WorldBounds>({
     minX: -1.6,
@@ -165,6 +165,10 @@ export function ElectricFieldSandbox() {
   }, [offsetX, offsetY]);
 
   useEffect(() => {
+    zoomRef.current = zoom;
+  }, [zoom]);
+
+  useEffect(() => {
     boundsRef.current = viewBounds;
   }, [viewBounds]);
 
@@ -205,6 +209,7 @@ export function ElectricFieldSandbox() {
       const baseCenterX = (baseBounds.minX + baseBounds.maxX) * 0.5;
       const baseCenterY = (baseBounds.minY + baseBounds.maxY) * 0.5;
 
+      zoomRef.current = boundedZoom;
       setZoom(boundedZoom);
       setOffsetX(centerX - baseCenterX);
       setOffsetY(centerY - baseCenterY);
@@ -306,34 +311,15 @@ export function ElectricFieldSandbox() {
       );
     };
 
-    const onMouseMove = (event: MouseEvent) => {
-      if (!panStateRef.current && !dragStateRef.current) {
-        const wantsRightPan = (event.buttons & 2) === 2;
-        const wantsSpacePan =
-          isSpacePressedRef.current && (event.buttons & 1) === 1;
-        if (wantsRightPan || wantsSpacePan) {
-          panStateRef.current = {
-            startX: event.clientX,
-            startY: event.clientY,
-            startOffsetX: cameraRef.current.offsetX,
-            startOffsetY: cameraRef.current.offsetY,
-          };
-        }
-      }
-      panFromClientDelta(event.clientX, event.clientY);
-    };
-
     const onPointerUp = () => {
       dragStateRef.current = null;
       panStateRef.current = null;
     };
 
     window.addEventListener("pointermove", onPointerMove);
-    window.addEventListener("mousemove", onMouseMove);
     window.addEventListener("pointerup", onPointerUp);
     return () => {
       window.removeEventListener("pointermove", onPointerMove);
-      window.removeEventListener("mousemove", onMouseMove);
       window.removeEventListener("pointerup", onPointerUp);
     };
   }, [getWorldFromClientPoint, panFromClientDelta]);
@@ -408,21 +394,11 @@ export function ElectricFieldSandbox() {
   const handleCanvasWheel = (event: ReactWheelEvent<HTMLDivElement>) => {
     event.preventDefault();
     const zoomFactor = Math.exp(-event.deltaY * 0.0015);
-    zoomAtClientPoint(event.clientX, event.clientY, zoom * zoomFactor);
-  };
-
-  const handleCanvasMouseDown = (event: ReactMouseEvent<HTMLDivElement>) => {
-    if (event.button !== 2) {
-      return;
-    }
-    event.preventDefault();
-    setSelectedChargeId(null);
-    panStateRef.current = {
-      startX: event.clientX,
-      startY: event.clientY,
-      startOffsetX: cameraRef.current.offsetX,
-      startOffsetY: cameraRef.current.offsetY,
-    };
+    zoomAtClientPoint(
+      event.clientX,
+      event.clientY,
+      zoomRef.current * zoomFactor,
+    );
   };
 
   return (
@@ -625,7 +601,6 @@ export function ElectricFieldSandbox() {
       <div
         ref={containerRef}
         onPointerDown={handleCanvasPointerDown}
-        onMouseDown={handleCanvasMouseDown}
         onPointerUp={() => {
           panStateRef.current = null;
         }}

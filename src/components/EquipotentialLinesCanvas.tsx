@@ -171,11 +171,21 @@ export function EquipotentialLinesCanvas({
               context.lineTo(crossings[1].x, crossings[1].y);
               context.stroke();
             } else if (crossings.length === 4) {
+              const centerPotential = (v00 + v10 + v11 + v01) * 0.25;
+              const useTopRightAndBottomLeft =
+                (centerPotential >= level) === (v00 >= level);
               context.beginPath();
-              context.moveTo(crossings[0].x, crossings[0].y);
-              context.lineTo(crossings[1].x, crossings[1].y);
-              context.moveTo(crossings[2].x, crossings[2].y);
-              context.lineTo(crossings[3].x, crossings[3].y);
+              if (useTopRightAndBottomLeft) {
+                context.moveTo(crossings[0].x, crossings[0].y);
+                context.lineTo(crossings[1].x, crossings[1].y);
+                context.moveTo(crossings[2].x, crossings[2].y);
+                context.lineTo(crossings[3].x, crossings[3].y);
+              } else {
+                context.moveTo(crossings[0].x, crossings[0].y);
+                context.lineTo(crossings[3].x, crossings[3].y);
+                context.moveTo(crossings[1].x, crossings[1].y);
+                context.lineTo(crossings[2].x, crossings[2].y);
+              }
               context.stroke();
             }
           }
