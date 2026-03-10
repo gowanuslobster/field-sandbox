@@ -14,16 +14,18 @@ import {
   FieldLinesCanvas,
   type FieldLineRenderMode,
 } from "@/components/FieldLinesCanvas";
+import { ParticlesCanvas } from "@/components/ParticlesCanvas";
 import { VectorFieldCanvas } from "@/components/VectorFieldCanvas";
-import { potentialAtPoint } from "@/physics/electrostatics";
+import { calculateFieldAt, potentialAtPoint } from "@/physics/electrostatics";
 import type { Charge, WorldBounds } from "@/physics/types";
+import type { Vector2Like } from "@/physics/vector2d";
 import {
   getViewBounds,
   screenToWorld,
   worldToScreen,
 } from "@/physics/world-space";
 
-type Mode = "select" | "add_positive" | "add_negative";
+type Mode = "select" | "add_positive" | "add_negative" | "drop_test_charge";
 
 const CHARGE_RADIUS_PX = 13;
 const MIN_ZOOM = 0.1;
@@ -64,6 +66,8 @@ function toChargeClass(value: number, selected: boolean): string {
 export function ElectricFieldSandbox() {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const dragStateRef = useRef<{ chargeId: string } | null>(null);
+  const probeDragRef = useRef(false);
+  const particleSpawnerRef = useRef<((position: Vector2Like) => void) | null>(null);
   const panStateRef = useRef<{
     startX: number;
     startY: number;
@@ -97,8 +101,16 @@ export function ElectricFieldSandbox() {
   const [fieldLineMode, setFieldLineMode] =
     useState<FieldLineRenderMode>("static_arrows");
   const [isDraggingCharge, setIsDraggingCharge] = useState(false);
-  const [isSimulating, setIsSimulating] = useState(
-    fieldLineMode === "animated_dashes",
+  const [testParticleCount, setTestParticleCount] = useState(0);
+  const [probePosition, setProbePosition] = useState<Vector2Like>({
+    x: -0.18,
+    y: 0.18,
+  });
+  const handleParticleSpawnerReady = useCallback(
+    (spawner: ((position: Vector2Like) => void) | null) => {
+      particleSpawnerRef.current = spawner;
+    },
+    [],
   );
 
   const panFromClientDelta = useCallback((clientX: number, clientY: number) => {
@@ -162,6 +174,18 @@ export function ElectricFieldSandbox() {
   const contourInterval = useMemo(
     () => 1 / Math.max(0.35, contourDensity),
     [contourDensity],
+  );
+  const isSimulating =
+    isDraggingCharge ||
+    fieldLineMode === "animated_dashes" ||
+    testParticleCount > 0;
+  const probePotential = useMemo(
+    () => potentialAtPoint(probePosition, charges),
+    [charges, probePosition],
+  );
+  const probeField = useMemo(
+    () => calculateFieldAt(probePosition.x, probePosition.y, charges),
+    [charges, probePosition],
   );
 
   useEffect(() => {
@@ -267,7 +291,6 @@ export function ElectricFieldSandbox() {
   const startDrag = (chargeId: string) => {
     dragStateRef.current = { chargeId };
     setIsDraggingCharge(true);
-    setIsSimulating(true);
     setSelectedChargeId(chargeId);
     setMode("select");
   };
@@ -307,6 +330,11 @@ export function ElectricFieldSandbox() {
         return;
       }
 
+      if (probeDragRef.current) {
+        setProbePosition(world);
+        return;
+      }
+
       setCursorPotential(potentialAtPoint(world, chargesRef.current));
       const dragging = dragStateRef.current;
       if (!dragging) {
@@ -324,8 +352,8 @@ export function ElectricFieldSandbox() {
     const onPointerUp = () => {
       dragStateRef.current = null;
       panStateRef.current = null;
+      probeDragRef.current = false;
       setIsDraggingCharge(false);
-      setIsSimulating(fieldLineMode === "animated_dashes");
     };
 
     window.addEventListener("pointermove", onPointerMove);
@@ -334,7 +362,7 @@ export function ElectricFieldSandbox() {
       window.removeEventListener("pointermove", onPointerMove);
       window.removeEventListener("pointerup", onPointerUp);
     };
-  }, [fieldLineMode, getWorldFromClientPoint, panFromClientDelta]);
+  }, [getWorldFromClientPoint, panFromClientDelta]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -390,6 +418,11 @@ export function ElectricFieldSandbox() {
       return;
     }
 
+    if (mode === "drop_test_charge") {
+      particleSpawnerRef.current?.(world);
+      return;
+    }
+
     const value = mode === "add_positive" ? 1 : -1;
     const id = nextChargeId();
     setCharges((current) => {
@@ -412,6 +445,37 @@ export function ElectricFieldSandbox() {
       zoomRef.current * zoomFactor,
     );
   };
+
+  const probeScreen = worldToScreen(
+    probePosition,
+    viewBounds,
+    size.width,
+    size.height,
+  );
+  const probeFieldMagnitude = probeField.magnitude();
+  const probeDirection =
+    probeFieldMagnitude > 1e-6
+      ? probeField.scale(1 / probeFieldMagnitude)
+      : probeField;
+  const probeArrowWorldLength =
+    (viewBounds.maxX - viewBounds.minX) *
+    (0.017 + 0.03 * Math.min(1, Math.log1p(probeFieldMagnitude) / Math.log1p(10)));
+  const probeArrowWorldEnd = {
+    x: probePosition.x + probeDirection.x * probeArrowWorldLength,
+    y: probePosition.y + probeDirection.y * probeArrowWorldLength,
+  };
+  const probeArrowScreenEnd = worldToScreen(
+    probeArrowWorldEnd,
+    viewBounds,
+    size.width,
+    size.height,
+  );
+  const probeArrowDx = probeArrowScreenEnd.x - probeScreen.x;
+  const probeArrowDy = probeArrowScreenEnd.y - probeScreen.y;
+  const probeArrowLength = Math.hypot(probeArrowDx, probeArrowDy);
+  const probeArrowUx = probeArrowLength > 1e-6 ? probeArrowDx / probeArrowLength : 0;
+  const probeArrowUy = probeArrowLength > 1e-6 ? probeArrowDy / probeArrowLength : 0;
+  const probeHeadSize = 7;
 
   return (
     <section className="h-dvh w-full bg-[#0F0F0F] text-zinc-100">
@@ -464,6 +528,17 @@ export function ElectricFieldSandbox() {
             className="rounded-md bg-rose-400/20 px-3 py-2 text-sm text-rose-100 transition-colors duration-200 hover:bg-rose-400/35"
           >
             Remove Selected
+          </button>
+          <button
+            type="button"
+            onClick={() => setMode("drop_test_charge")}
+            className={`col-span-2 rounded-md px-3 py-2 text-sm transition-all duration-200 ${
+              mode === "drop_test_charge"
+                ? "bg-amber-200 text-black shadow-[0_0_20px_rgba(255,226,153,0.42)]"
+                : "bg-amber-300/20 text-amber-100 hover:bg-amber-300/35"
+            }`}
+          >
+            + Drop Test Charge
           </button>
         </div>
         {selectedCharge ? (
@@ -529,13 +604,7 @@ export function ElectricFieldSandbox() {
         <div className="mt-2 space-y-2">
           <button
             type="button"
-            onClick={() =>
-              setFieldLineMode((current) => {
-                const nextMode = nextFieldLineMode(current);
-                setIsSimulating(isDraggingCharge || nextMode === "animated_dashes");
-                return nextMode;
-              })
-            }
+            onClick={() => setFieldLineMode((current) => nextFieldLineMode(current))}
             className={`flex w-full items-center justify-between rounded-md px-3 py-2 text-sm transition-all duration-200 ${
               fieldLineMode === "animated_dashes"
                 ? "bg-violet-300/85 text-black shadow-[0_0_14px_rgba(196,181,253,0.45)]"
@@ -625,9 +694,34 @@ export function ElectricFieldSandbox() {
           </button>
         </div>
 
+        <div className="mt-4 rounded-lg border border-cyan-200/20 bg-cyan-950/20 px-3 py-2 text-xs">
+          <p className="font-medium uppercase tracking-[0.15em] text-cyan-100/85">
+            Slope Probe
+          </p>
+          <div className="mt-2 space-y-1 text-cyan-100">
+            <p>
+              V: <span className="font-semibold">{probePotential.toFixed(3)}</span>
+            </p>
+            <p>
+              E:{" "}
+              <span className="font-semibold">
+                ({probeField.x.toFixed(3)}, {probeField.y.toFixed(3)}) | |E|{" "}
+                {probeField.magnitude().toFixed(3)}
+              </span>
+            </p>
+            <p>
+              (x, y):{" "}
+              <span className="font-semibold">
+                ({probePosition.x.toFixed(3)}, {probePosition.y.toFixed(3)})
+              </span>
+            </p>
+          </div>
+        </div>
+
         <div className="mt-4 rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-xs">
           <p className="font-medium tracking-wide text-zinc-100">Charges: {charges.length}</p>
           <p className="text-zinc-300">Cursor potential V ≈ {cursorPotential.toFixed(3)}</p>
+          <p className="text-zinc-300">Test Particles: {testParticleCount}</p>
           <p className="mt-1 text-zinc-400">
             Tip: Wheel to zoom; pan with Select-drag, right-drag, or Space-drag.
           </p>
@@ -680,6 +774,75 @@ export function ElectricFieldSandbox() {
             className="pointer-events-none absolute inset-0 h-full w-full"
           />
         ) : null}
+        <ParticlesCanvas
+          charges={charges}
+          bounds={viewBounds}
+          isSimulating={isSimulating}
+          onSpawnerReady={handleParticleSpawnerReady}
+          onParticleCountChange={setTestParticleCount}
+          className="pointer-events-none absolute inset-0 h-full w-full"
+        />
+        <svg className="pointer-events-none absolute inset-0 h-full w-full">
+          <line
+            x1={probeScreen.x}
+            y1={probeScreen.y}
+            x2={probeArrowScreenEnd.x}
+            y2={probeArrowScreenEnd.y}
+            stroke="rgba(184, 255, 247, 0.9)"
+            strokeWidth="2.1"
+            strokeLinecap="round"
+          />
+          <line
+            x1={probeArrowScreenEnd.x}
+            y1={probeArrowScreenEnd.y}
+            x2={
+              probeArrowScreenEnd.x -
+              probeArrowUx * probeHeadSize -
+              probeArrowUy * probeHeadSize * 0.6
+            }
+            y2={
+              probeArrowScreenEnd.y -
+              probeArrowUy * probeHeadSize +
+              probeArrowUx * probeHeadSize * 0.6
+            }
+            stroke="rgba(184, 255, 247, 0.9)"
+            strokeWidth="2"
+            strokeLinecap="round"
+          />
+          <line
+            x1={probeArrowScreenEnd.x}
+            y1={probeArrowScreenEnd.y}
+            x2={
+              probeArrowScreenEnd.x -
+              probeArrowUx * probeHeadSize +
+              probeArrowUy * probeHeadSize * 0.6
+            }
+            y2={
+              probeArrowScreenEnd.y -
+              probeArrowUy * probeHeadSize -
+              probeArrowUx * probeHeadSize * 0.6
+            }
+            stroke="rgba(184, 255, 247, 0.9)"
+            strokeWidth="2"
+            strokeLinecap="round"
+          />
+        </svg>
+        <button
+          type="button"
+          onPointerDown={(event) => {
+            if (event.button !== 0) {
+              return;
+            }
+            event.stopPropagation();
+            probeDragRef.current = true;
+          }}
+          className="absolute z-10 -translate-x-1/2 -translate-y-1/2 rounded-full border border-cyan-100/75 bg-cyan-200/25 p-1 text-[11px] text-cyan-50 shadow-[0_0_12px_rgba(103,232,249,0.65)]"
+          style={{ left: probeScreen.x, top: probeScreen.y }}
+          aria-label="Slope Probe"
+          title="Drag Slope Probe"
+        >
+          ⌖
+        </button>
 
         {charges.map((charge) => {
           const screen = worldToScreen(
