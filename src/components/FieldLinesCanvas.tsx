@@ -218,6 +218,8 @@ export function FieldLinesCanvas({
       context.save();
       context.scale(dpr, dpr);
       context.clearRect(0, 0, width, height);
+      context.lineCap = "round";
+      context.lineJoin = "round";
 
       if (mode === "off") {
         context.restore();
