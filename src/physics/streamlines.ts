@@ -119,9 +119,11 @@ function traceDirection(
 ): Vector2D[] {
   const points: Vector2D[] = [];
   let current = Vector2D.from(seed);
+  let hasEnteredBounds = false;
 
   for (let step = 0; step < options.maxSteps; step += 1) {
-    if (!inBounds(current, bounds)) {
+    const insideBounds = inBounds(current, bounds);
+    if (!insideBounds && hasEnteredBounds) {
       break;
     }
 
@@ -131,20 +133,22 @@ function traceDirection(
     if (field.magnitude() < options.minFieldMagnitude) {
       break;
     }
-    if (
-      step > 0 &&
-      nearAnyCharge(
-        current,
-        charges,
-        directionSign,
-        options.captureRadius,
-        sourceChargeId,
-      )
-    ) {
-      break;
+    if (insideBounds) {
+      hasEnteredBounds = true;
+      if (
+        step > 0 &&
+        nearAnyCharge(
+          current,
+          charges,
+          directionSign,
+          options.captureRadius,
+          sourceChargeId,
+        )
+      ) {
+        break;
+      }
+      points.push(current);
     }
-
-    points.push(current);
     const nearestChargeDistance = distanceToNearestCharge(current, charges);
     const adaptiveScale = Math.min(
       1,
@@ -167,18 +171,23 @@ export function traceFieldLine(
   seed: Vector2Like,
   charges: Charge[],
   bounds: WorldBounds,
-  directionSign: number,
-  sourceChargeId: string | null,
+  directionSign?: number,
+  sourceChargeId?: string | null,
   options?: Partial<TraceOptions>,
 ): Vector2D[] {
   const mergedOptions = { ...DEFAULT_TRACE_OPTIONS, ...options };
+  let resolvedDirectionSign = directionSign;
+  if (resolvedDirectionSign === undefined) {
+    const sourceCharge = charges.find((charge) => charge.id === sourceChargeId);
+    resolvedDirectionSign = sourceCharge && sourceCharge.value < 0 ? -1 : 1;
+  }
   return traceDirection(
     seed,
     charges,
     bounds,
-    directionSign,
+    resolvedDirectionSign,
     mergedOptions,
-    sourceChargeId,
+    sourceChargeId ?? null,
   );
 }
 
@@ -197,9 +206,18 @@ export function buildSeedPoints(
     mergedOptions.seedOffsetRadius,
     mergedOptions.captureRadius * 1.15,
   );
+  const expandedBounds: WorldBounds = {
+    minX: bounds.minX - seedRadius * 2,
+    maxX: bounds.maxX + seedRadius * 2,
+    minY: bounds.minY - seedRadius * 2,
+    maxY: bounds.maxY + seedRadius * 2,
+  };
 
   for (let chargeIndex = 0; chargeIndex < charges.length; chargeIndex += 1) {
     const charge = charges[chargeIndex];
+    if (!inBounds(charge.position, expandedBounds)) {
+      continue;
+    }
     const directionSign = charge.value >= 0 ? 1 : -1;
     const seedsForCharge = Math.max(8, Math.floor(Math.abs(charge.value) * 12));
     const chargeAngularOffset =
@@ -210,9 +228,7 @@ export function buildSeedPoints(
         seedRadius,
       );
       const seed = Vector2D.from(charge.position).add(radial);
-      if (inBounds(seed, bounds)) {
-        seeds.push({ seed, directionSign, sourceChargeId: charge.id });
-      }
+      seeds.push({ seed, directionSign, sourceChargeId: charge.id });
     }
   }
 

@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { electricFieldAtPoint, potentialAtPoint } from "@/physics/electrostatics";
 import { buildFieldLines } from "@/physics/streamlines";
 import type { Charge, WorldBounds } from "@/physics/types";
-import type { Vector2Like } from "@/physics/vector2d";
+import type { Vector2D, Vector2Like } from "@/physics/vector2d";
 import {
   type WorldToScreenTransform,
   getWorldToScreenTransform,
@@ -16,6 +16,8 @@ export type FieldLineRenderMode = "animated_dashes" | "static_arrows" | "off";
 type FieldLinesCanvasProps = {
   charges: Charge[];
   bounds: WorldBounds;
+  isSimulating: boolean;
+  isDragging?: boolean;
   useGradient?: boolean;
   mode?: FieldLineRenderMode;
   className?: string;
@@ -161,14 +163,89 @@ function drawDirectionArrows(
 export function FieldLinesCanvas({
   charges,
   bounds,
+  isSimulating,
+  isDragging = false,
   useGradient = false,
   mode = "animated_dashes",
   className,
 }: FieldLinesCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const lines = useMemo(() => {
-    return buildFieldLines(charges, bounds);
-  }, [bounds, charges]);
+  const linesRef = useRef<Vector2D[][]>([]);
+  const chargesRef = useRef(charges);
+  const boundsRef = useRef(bounds);
+  const modeRef = useRef(mode);
+  const useGradientRef = useRef(useGradient);
+  const isSimulatingRef = useRef(isSimulating);
+  const isDraggingRef = useRef(isDragging);
+  const lastBuildAtRef = useRef(0);
+  const buildThrottleTimerRef = useRef<number | null>(null);
+  const needsRenderRef = useRef(true);
+  const requestRenderRef = useRef<(() => void) | null>(null);
+
+  const rebuildFieldLines = useCallback(() => {
+    linesRef.current = buildFieldLines(chargesRef.current, boundsRef.current);
+    lastBuildAtRef.current = performance.now();
+    needsRenderRef.current = true;
+    requestRenderRef.current?.();
+  }, []);
+
+  const scheduleFieldLineBuild = useCallback(() => {
+    if (!isDraggingRef.current) {
+      if (buildThrottleTimerRef.current !== null) {
+        window.clearTimeout(buildThrottleTimerRef.current);
+        buildThrottleTimerRef.current = null;
+      }
+      rebuildFieldLines();
+      return;
+    }
+
+    const throttleMs = 16;
+    const elapsed = performance.now() - lastBuildAtRef.current;
+    if (elapsed >= throttleMs) {
+      rebuildFieldLines();
+      return;
+    }
+    if (buildThrottleTimerRef.current !== null) {
+      return;
+    }
+    buildThrottleTimerRef.current = window.setTimeout(() => {
+      buildThrottleTimerRef.current = null;
+      rebuildFieldLines();
+    }, throttleMs - elapsed);
+  }, [rebuildFieldLines]);
+
+  useEffect(() => {
+    chargesRef.current = charges;
+    boundsRef.current = bounds;
+    scheduleFieldLineBuild();
+  }, [bounds, charges, isDragging, scheduleFieldLineBuild]);
+
+  useEffect(() => {
+    modeRef.current = mode;
+    needsRenderRef.current = true;
+    requestRenderRef.current?.();
+  }, [mode]);
+
+  useEffect(() => {
+    useGradientRef.current = useGradient;
+    needsRenderRef.current = true;
+    requestRenderRef.current?.();
+  }, [useGradient]);
+
+  useEffect(() => {
+    isSimulatingRef.current = isSimulating;
+    if (isSimulating) {
+      needsRenderRef.current = true;
+      requestRenderRef.current?.();
+    }
+  }, [isSimulating]);
+
+  useEffect(() => {
+    isDraggingRef.current = isDragging;
+    if (!isDragging) {
+      scheduleFieldLineBuild();
+    }
+  }, [isDragging, scheduleFieldLineBuild]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -176,10 +253,9 @@ export function FieldLinesCanvas({
       return;
     }
 
-    let animationFrame = 0;
+    let animationFrame: number | null = null;
     let dashOffset = 0;
     let previous = performance.now();
-    let drawFrame: (time: number) => void = () => {};
     const resizeObserver = new ResizeObserver((entries) => {
       const entry = entries[0];
       if (!entry) {
@@ -192,20 +268,19 @@ export function FieldLinesCanvas({
       canvas.height = Math.floor(height * dpr);
       canvas.style.width = `${width}px`;
       canvas.style.height = `${height}px`;
-      if (mode === "static_arrows") {
-        drawFrame(performance.now());
-      }
+      needsRenderRef.current = true;
+      requestRenderRef.current?.();
     });
 
     resizeObserver.observe(canvas);
 
-    drawFrame = (time: number) => {
+    const drawFrame = (time: number) => {
       const context = canvas.getContext("2d");
       if (!context) {
         return;
       }
 
-      if (mode === "animated_dashes") {
+      if (modeRef.current === "animated_dashes") {
         const dt = Math.max(0.001, (time - previous) / 1000);
         previous = time;
         dashOffset -= dt * 90;
@@ -218,48 +293,77 @@ export function FieldLinesCanvas({
       context.save();
       context.scale(dpr, dpr);
       context.clearRect(0, 0, width, height);
+      context.lineCap = "round";
+      context.lineJoin = "round";
 
-      if (mode === "off") {
+      if (modeRef.current === "off") {
         context.restore();
         return;
       }
 
       context.lineWidth = 1.2;
-      if (mode === "animated_dashes") {
+      if (modeRef.current === "animated_dashes") {
         context.setLineDash([12, 11]);
         context.lineDashOffset = dashOffset;
       } else {
         context.setLineDash([]);
       }
-      context.shadowColor = useGradient
+      context.shadowColor = useGradientRef.current
         ? "rgba(188, 142, 255, 0.45)"
         : "rgba(112, 214, 255, 0.35)";
       context.shadowBlur = 8;
-      const transform = getWorldToScreenTransform(bounds, width, height);
+      const transform = getWorldToScreenTransform(boundsRef.current, width, height);
 
-      for (const line of lines) {
-        drawPolyline(context, line, charges, transform, useGradient);
-        if (mode === "static_arrows") {
-          drawDirectionArrows(context, line, charges, transform);
+      for (const line of linesRef.current) {
+        drawPolyline(
+          context,
+          line,
+          chargesRef.current,
+          transform,
+          useGradientRef.current,
+        );
+        if (modeRef.current === "static_arrows") {
+          drawDirectionArrows(context, line, chargesRef.current, transform);
         }
       }
 
       context.restore();
-      if (mode === "animated_dashes") {
-        animationFrame = window.requestAnimationFrame(drawFrame);
-      }
     };
 
-    if (mode === "animated_dashes") {
-      animationFrame = window.requestAnimationFrame(drawFrame);
-    } else {
-      drawFrame(performance.now());
-    }
+    const scheduleRender = () => {
+      if (animationFrame !== null) {
+        return;
+      }
+      animationFrame = window.requestAnimationFrame((time) => {
+        animationFrame = null;
+        drawFrame(time);
+        needsRenderRef.current = false;
+        const keepRendering =
+          isSimulatingRef.current || modeRef.current === "animated_dashes";
+        if (keepRendering || needsRenderRef.current) {
+          scheduleRender();
+        }
+      });
+    };
+
+    requestRenderRef.current = () => {
+      needsRenderRef.current = true;
+      scheduleRender();
+    };
+    scheduleRender();
+
     return () => {
-      window.cancelAnimationFrame(animationFrame);
+      requestRenderRef.current = null;
+      if (animationFrame !== null) {
+        window.cancelAnimationFrame(animationFrame);
+      }
+      if (buildThrottleTimerRef.current !== null) {
+        window.clearTimeout(buildThrottleTimerRef.current);
+        buildThrottleTimerRef.current = null;
+      }
       resizeObserver.disconnect();
     };
-  }, [bounds, charges, lines, mode, useGradient]);
+  }, []);
 
   return <canvas ref={canvasRef} className={`${className ?? ""} block h-full w-full`} />;
 }

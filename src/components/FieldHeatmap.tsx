@@ -66,6 +66,7 @@ type FieldHeatmapProps = {
   zoom: number;
   offsetX: number;
   offsetY: number;
+  isSimulating: boolean;
   opacity?: number;
   className?: string;
 };
@@ -184,6 +185,7 @@ export function FieldHeatmap({
   zoom,
   offsetX,
   offsetY,
+  isSimulating,
   opacity = 0.9,
   className,
 }: FieldHeatmapProps) {
@@ -193,27 +195,48 @@ export function FieldHeatmap({
   const baseBoundsRef = useRef(baseBounds);
   const zoomRef = useRef(zoom);
   const offsetRef = useRef({ x: offsetX, y: offsetY });
+  const isSimulatingRef = useRef(isSimulating);
   const opacityTargetRef = useRef(opacity);
   const opacityCurrentRef = useRef(opacity);
+  const needsRenderRef = useRef(true);
+  const requestRenderRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     chargesRef.current = charges;
+    needsRenderRef.current = true;
+    requestRenderRef.current?.();
   }, [charges]);
 
   useEffect(() => {
     baseBoundsRef.current = baseBounds;
+    needsRenderRef.current = true;
+    requestRenderRef.current?.();
   }, [baseBounds]);
 
   useEffect(() => {
     zoomRef.current = zoom;
+    needsRenderRef.current = true;
+    requestRenderRef.current?.();
   }, [zoom]);
 
   useEffect(() => {
     offsetRef.current = { x: offsetX, y: offsetY };
+    needsRenderRef.current = true;
+    requestRenderRef.current?.();
   }, [offsetX, offsetY]);
 
   useEffect(() => {
+    isSimulatingRef.current = isSimulating;
+    if (isSimulating) {
+      needsRenderRef.current = true;
+      requestRenderRef.current?.();
+    }
+  }, [isSimulating]);
+
+  useEffect(() => {
     opacityTargetRef.current = opacity;
+    needsRenderRef.current = true;
+    requestRenderRef.current?.();
   }, [opacity]);
 
   useEffect(() => {
@@ -237,7 +260,7 @@ export function FieldHeatmap({
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
 
-    let animationFrame = 0;
+    let animationFrame: number | null = null;
     const resizeObserver = new ResizeObserver((entries) => {
       const entry = entries[0];
       if (!entry) {
@@ -250,6 +273,8 @@ export function FieldHeatmap({
       canvas.height = Math.floor(height * dpr);
       canvas.style.width = `${width}px`;
       canvas.style.height = `${height}px`;
+      needsRenderRef.current = true;
+      requestRenderRef.current?.();
     });
 
     resizeObserver.observe(canvas);
@@ -296,13 +321,34 @@ export function FieldHeatmap({
         (opacityTargetRef.current - opacityCurrentRef.current) * 0.14;
       context.uniform1f(uniforms.opacity, opacityCurrentRef.current);
       context.drawArrays(context.TRIANGLES, 0, 6);
-
-      animationFrame = window.requestAnimationFrame(render);
     };
-
-    animationFrame = window.requestAnimationFrame(render);
+    const scheduleRender = () => {
+      if (animationFrame !== null) {
+        return;
+      }
+      animationFrame = window.requestAnimationFrame(() => {
+        animationFrame = null;
+        render();
+        const opacitySettled =
+          Math.abs(opacityTargetRef.current - opacityCurrentRef.current) < 0.003;
+        needsRenderRef.current = false;
+        const keepRendering =
+          isSimulatingRef.current || needsRenderRef.current || !opacitySettled;
+        if (keepRendering) {
+          scheduleRender();
+        }
+      });
+    };
+    requestRenderRef.current = () => {
+      needsRenderRef.current = true;
+      scheduleRender();
+    };
+    scheduleRender();
     return () => {
-      window.cancelAnimationFrame(animationFrame);
+      requestRenderRef.current = null;
+      if (animationFrame !== null) {
+        window.cancelAnimationFrame(animationFrame);
+      }
       resizeObserver.disconnect();
     };
   }, []);
