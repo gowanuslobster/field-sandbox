@@ -152,4 +152,68 @@ describe("symplecticEulerCromerParticleStep", () => {
     expect(minX).toBeLessThan(-0.45);
     expect(maxX).toBeLessThan(1.1);
   });
+
+  it("returns near initial radius after one full oscillation cycle", () => {
+    const charges: Charge[] = [{ id: "source", position: { x: 0, y: 0 }, value: -1 }];
+    let particle = toTestParticle({
+      pos: { x: 0.65, y: 0 },
+      vel: { x: 0, y: 0 },
+      mass: 1,
+      charge: 10,
+    });
+
+    const frameDt = 1 / 60;
+    const frames = 1800;
+    let crossedToNegativeSide = false;
+    let passedLeftTurningPoint = false;
+    let rightTurningPoint: { x: number; speed: number; y: number } | null = null;
+
+    for (let frame = 0; frame < frames; frame += 1) {
+      const substeps = Math.max(
+        1,
+        Math.min(MAX_SUBSTEPS_PER_FRAME, Math.ceil(frameDt / PHYSICS_BASE_DT)),
+      );
+      const substepDt = frameDt / substeps;
+      for (let step = 0; step < substeps; step += 1) {
+        const previousVx = particle.vel.x;
+        particle = symplecticEulerCromerParticleStep(particle, charges, substepDt);
+
+        if (!crossedToNegativeSide && particle.pos.x < 0) {
+          crossedToNegativeSide = true;
+        }
+        if (
+          crossedToNegativeSide &&
+          !passedLeftTurningPoint &&
+          previousVx < 0 &&
+          particle.vel.x >= 0 &&
+          particle.pos.x < 0
+        ) {
+          passedLeftTurningPoint = true;
+        }
+        if (
+          passedLeftTurningPoint &&
+          previousVx > 0 &&
+          particle.vel.x <= 0 &&
+          particle.pos.x > 0
+        ) {
+          rightTurningPoint = {
+            x: particle.pos.x,
+            speed: particle.vel.magnitude(),
+            y: particle.pos.y,
+          };
+          break;
+        }
+      }
+      if (rightTurningPoint) {
+        break;
+      }
+    }
+
+    expect(crossedToNegativeSide).toBe(true);
+    expect(passedLeftTurningPoint).toBe(true);
+    expect(rightTurningPoint).not.toBeNull();
+    expect(Math.abs((rightTurningPoint?.x ?? 0) - 0.65)).toBeLessThan(0.08);
+    expect(rightTurningPoint?.speed ?? Number.POSITIVE_INFINITY).toBeLessThan(0.25);
+    expect(Math.abs(rightTurningPoint?.y ?? Number.POSITIVE_INFINITY)).toBeLessThan(0.06);
+  });
 });
