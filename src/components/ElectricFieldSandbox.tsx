@@ -492,6 +492,51 @@ export function ElectricFieldSandbox() {
     };
   }, [removeSelectedCharge]);
 
+  const initializeDropSlingshot = useCallback(
+    (clientX: number, clientY: number) => {
+      const world = getWorldFromClientPoint(clientX, clientY);
+      if (!world) {
+        return;
+      }
+
+      const worldPerPixel =
+        (viewBounds.maxX - viewBounds.minX) / Math.max(size.width, 1);
+      const hit = particlePickRef.current?.(world, worldPerPixel * 60);
+      if (hit) {
+        slingshotRef.current = {
+          particleId: hit.id,
+          origin: hit.pos,
+          spawnOnRelease: false,
+        };
+        particleFreezeRef.current?.(hit.id, true);
+        const preview: SlingshotPreview = {
+          particleId: hit.id,
+          origin: hit.pos,
+          cursor: world,
+          plannedVelocity: { x: 0, y: 0 },
+        };
+        slingshotPreviewRef.current = preview;
+        setSlingshotPreview(preview);
+        return;
+      }
+
+      slingshotRef.current = {
+        particleId: null,
+        origin: world,
+        spawnOnRelease: true,
+      };
+      const preview: SlingshotPreview = {
+        particleId: null,
+        origin: world,
+        cursor: world,
+        plannedVelocity: { x: 0, y: 0 },
+      };
+      slingshotPreviewRef.current = preview;
+      setSlingshotPreview(preview);
+    },
+    [getWorldFromClientPoint, size.width, viewBounds.maxX, viewBounds.minX],
+  );
+
   const handleCanvasPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
     const interactionMode = modeRef.current;
     if (
@@ -526,6 +571,9 @@ export function ElectricFieldSandbox() {
     }
 
     if (interactionMode === "drop_test_charge" && event.button === 0) {
+      if (!slingshotRef.current) {
+        initializeDropSlingshot(event.clientX, event.clientY);
+      }
       return;
     }
 
@@ -639,47 +687,9 @@ export function ElectricFieldSandbox() {
       if (slingshotRef.current) {
         return;
       }
-      const world = getWorldFromClientPoint(event.clientX, event.clientY);
-      if (!world) {
-        return;
-      }
-
-      const worldPerPixel =
-        (viewBounds.maxX - viewBounds.minX) / Math.max(size.width, 1);
-      const hit = particlePickRef.current?.(world, worldPerPixel * 60);
-      if (hit) {
-        slingshotRef.current = {
-          particleId: hit.id,
-          origin: hit.pos,
-          spawnOnRelease: false,
-        };
-        particleFreezeRef.current?.(hit.id, true);
-        const preview: SlingshotPreview = {
-          particleId: hit.id,
-          origin: hit.pos,
-          cursor: world,
-          plannedVelocity: { x: 0, y: 0 },
-        };
-        slingshotPreviewRef.current = preview;
-        setSlingshotPreview(preview);
-        return;
-      }
-
-      slingshotRef.current = {
-        particleId: null,
-        origin: world,
-        spawnOnRelease: true,
-      };
-      const preview: SlingshotPreview = {
-        particleId: null,
-        origin: world,
-        cursor: world,
-        plannedVelocity: { x: 0, y: 0 },
-      };
-      slingshotPreviewRef.current = preview;
-      setSlingshotPreview(preview);
+      initializeDropSlingshot(event.clientX, event.clientY);
     },
-    [getWorldFromClientPoint, size.width, viewBounds.maxX, viewBounds.minX],
+    [initializeDropSlingshot],
   );
 
   return (
