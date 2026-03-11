@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
-  ACCELERATION_SOFTENING_EPSILON,
-  PARTICLE_FIELD_SOFTENING,
+  PARTICLE_PLUMMER_EPSILON,
   SIMULATION_SPEED,
+  totalEnergyOfParticle,
   symplecticEulerCromerParticleStep,
   toTestParticle,
 } from "@/physics/dynamics";
@@ -38,15 +38,10 @@ describe("symplecticEulerCromerParticleStep", () => {
     });
     const dt = 0.1;
     const field = electricFieldAtPoint(particle.pos, charges, {
-      softening: PARTICLE_FIELD_SOFTENING,
+      softening: PARTICLE_PLUMMER_EPSILON,
     });
-    const dx = particle.pos.x - charges[0]!.position.x;
-    const dy = particle.pos.y - charges[0]!.position.y;
-    const minDistanceSquared = dx * dx + dy * dy;
-    const attenuation =
-      minDistanceSquared / (minDistanceSquared + ACCELERATION_SOFTENING_EPSILON);
-    const ax = field.x * (particle.charge / particle.mass) * attenuation;
-    const ay = field.y * (particle.charge / particle.mass) * attenuation;
+    const ax = field.x * (particle.charge / particle.mass);
+    const ay = field.y * (particle.charge / particle.mass);
     const effectiveDt = dt * SIMULATION_SPEED;
 
     const stepped = symplecticEulerCromerParticleStep(particle, charges, dt);
@@ -77,5 +72,48 @@ describe("symplecticEulerCromerParticleStep", () => {
     expect(Number.isFinite(stepped.pos.y)).toBe(true);
     expect(Number.isFinite(stepped.vel.x)).toBe(true);
     expect(Number.isFinite(stepped.vel.y)).toBe(true);
+  });
+
+  it("keeps total energy nearly constant for softened radial oscillation", () => {
+    const charges: Charge[] = [{ id: "source", position: { x: 0, y: 0 }, value: 1 }];
+    let particle = toTestParticle({
+      pos: { x: 0.65, y: 0 },
+      vel: { x: 0, y: 0 },
+      mass: 1,
+      charge: -1,
+    });
+    const initialEnergy = totalEnergyOfParticle(particle, charges);
+    const steps = 4000;
+    const dt = 0.0005;
+
+    for (let i = 0; i < steps; i += 1) {
+      particle = symplecticEulerCromerParticleStep(particle, charges, dt);
+    }
+
+    const finalEnergy = totalEnergyOfParticle(particle, charges);
+    const relativeDrift = Math.abs(finalEnergy - initialEnergy) / Math.abs(initialEnergy);
+    expect(relativeDrift).toBeLessThan(0.001);
+  });
+
+  it("crosses through source and reaches opposite turning side", () => {
+    const charges: Charge[] = [{ id: "source", position: { x: 0, y: 0 }, value: 1 }];
+    let particle = toTestParticle({
+      pos: { x: 0.65, y: 0 },
+      vel: { x: 0, y: 0 },
+      mass: 1,
+      charge: -1,
+    });
+    let minX = particle.pos.x;
+    const steps = 4000;
+    const dt = 0.0005;
+
+    for (let i = 0; i < steps; i += 1) {
+      particle = symplecticEulerCromerParticleStep(particle, charges, dt);
+      if (particle.pos.x < minX) {
+        minX = particle.pos.x;
+      }
+    }
+
+    expect(minX).toBeLessThan(-0.58);
   });
 });

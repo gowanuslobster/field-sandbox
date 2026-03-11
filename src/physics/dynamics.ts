@@ -1,16 +1,14 @@
-import { calculateFieldAt } from "@/physics/electrostatics";
+import { calculateFieldAt, potentialAtPoint } from "@/physics/electrostatics";
 import type { Charge } from "@/physics/types";
 import { Vector2D, type Vector2Like } from "@/physics/vector2d";
 
 export const SIMULATION_SPEED = 1.6;
 export const DEFAULT_TEST_PARTICLE_CHARGE = 10;
 export const DEFAULT_TEST_PARTICLE_MASS = 1;
-export const PHYSICS_BASE_DT = 0.002;
-export const MAX_SUBSTEPS_PER_FRAME = 20;
+export const PARTICLE_SUBSTEPS_PER_FRAME = 20;
 export const TRAIL_SAMPLE_EVERY_N_SUBSTEPS = 3;
-export const PARTICLE_FIELD_SOFTENING = 0.06;
-export const ACCELERATION_SOFTENING_EPSILON = 0.05;
-export const MAX_PARTICLE_SPEED = 2.6;
+// ~8px at the default zoom/viewport scale for stable near-source dynamics.
+export const PARTICLE_PLUMMER_EPSILON = 0.02;
 
 export type TestParticle = {
   pos: Vector2D;
@@ -40,23 +38,9 @@ export function symplecticEulerCromerParticleStep(
   const effectiveDt = dt * SIMULATION_SPEED;
   const clampedMass = Math.max(1e-6, particle.mass);
   const field = calculateFieldAt(particle.pos.x, particle.pos.y, charges, {
-    softening: PARTICLE_FIELD_SOFTENING,
+    softening: PARTICLE_PLUMMER_EPSILON,
   });
-  let minDistanceSquared = Number.POSITIVE_INFINITY;
-  for (const charge of charges) {
-    const dx = particle.pos.x - charge.position.x;
-    const dy = particle.pos.y - charge.position.y;
-    const distanceSquared = dx * dx + dy * dy;
-    if (distanceSquared < minDistanceSquared) {
-      minDistanceSquared = distanceSquared;
-    }
-  }
-  // Additional near-source softening keeps acceleration finite during close fly-bys.
-  const attenuation =
-    Number.isFinite(minDistanceSquared) && minDistanceSquared > 0
-      ? minDistanceSquared / (minDistanceSquared + ACCELERATION_SOFTENING_EPSILON)
-      : 1;
-  const acceleration = field.scale((particle.charge / clampedMass) * attenuation);
+  const acceleration = field.scale(particle.charge / clampedMass);
   const nextVelocity = particle.vel.add(acceleration.scale(effectiveDt));
   const nextPosition = particle.pos.add(nextVelocity.scale(effectiveDt));
 
@@ -65,4 +49,30 @@ export function symplecticEulerCromerParticleStep(
     vel: nextVelocity,
     pos: nextPosition,
   };
+}
+
+export function kineticEnergyOfParticle(particle: TestParticle): number {
+  return 0.5 * particle.mass * particle.vel.magnitudeSquared();
+}
+
+export function potentialEnergyOfParticle(
+  particle: TestParticle,
+  charges: Charge[],
+): number {
+  // Uses the same Plummer softening as force integration for consistency.
+  return (
+    particle.charge *
+    potentialAtPoint(particle.pos, charges, {
+      softening: PARTICLE_PLUMMER_EPSILON,
+    })
+  );
+}
+
+export function totalEnergyOfParticle(
+  particle: TestParticle,
+  charges: Charge[],
+): number {
+  return (
+    kineticEnergyOfParticle(particle) + potentialEnergyOfParticle(particle, charges)
+  );
 }
