@@ -16,6 +16,7 @@ import {
 } from "@/components/FieldLinesCanvas";
 import {
   ParticlesCanvas,
+  type ParticleEnergySnapshot,
   type ParticlesController,
 } from "@/components/ParticlesCanvas";
 import { VectorFieldCanvas } from "@/components/VectorFieldCanvas";
@@ -136,6 +137,8 @@ export function ElectricFieldSandbox() {
     useState<FieldLineRenderMode>("static_arrows");
   const [isDraggingCharge, setIsDraggingCharge] = useState(false);
   const [testParticleCount, setTestParticleCount] = useState(0);
+  const [particleEnergySnapshot, setParticleEnergySnapshot] =
+    useState<ParticleEnergySnapshot | null>(null);
   const [probePosition, setProbePosition] = useState<Vector2Like>({
     x: -0.18,
     y: 0.18,
@@ -945,6 +948,41 @@ export function ElectricFieldSandbox() {
             </p>
           </div>
         </div>
+        <div className="mt-3 rounded-lg border border-amber-200/20 bg-amber-950/20 px-3 py-2 text-xs">
+          <p className="font-medium uppercase tracking-[0.15em] text-amber-100/85">
+            Energy HUD
+          </p>
+          {particleEnergySnapshot ? (
+            <div className="mt-2 space-y-1 text-amber-100">
+              <p>
+                Tracked:{" "}
+                <span className="font-semibold">{particleEnergySnapshot.particleId}</span>
+              </p>
+              <p>
+                E = KE + PE:{" "}
+                <span className="font-semibold">
+                  {particleEnergySnapshot.totalEnergy.toFixed(6)}
+                </span>
+              </p>
+              <p>
+                KE / PE:{" "}
+                <span className="font-semibold">
+                  {particleEnergySnapshot.kineticEnergy.toFixed(6)} /{" "}
+                  {particleEnergySnapshot.potentialEnergy.toFixed(6)}
+                </span>
+              </p>
+              <p>
+                Drift from baseline:{" "}
+                <span className="font-semibold">
+                  {particleEnergySnapshot.driftPercent >= 0 ? "+" : ""}
+                  {particleEnergySnapshot.driftPercent.toFixed(3)}%
+                </span>
+              </p>
+            </div>
+          ) : (
+            <p className="mt-2 text-amber-100/80">Drop a test particle to monitor KE + PE.</p>
+          )}
+        </div>
 
         <div className="mt-4 rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-xs">
           <p className="font-medium tracking-wide text-zinc-100">Charges: {charges.length}</p>
@@ -1011,6 +1049,7 @@ export function ElectricFieldSandbox() {
           isSimulating={isSimulating}
           onControllerReady={handleParticleControllerReady}
           onParticleCountChange={setTestParticleCount}
+          onEnergySnapshotChange={setParticleEnergySnapshot}
           className="pointer-events-none absolute inset-0 h-full w-full"
         />
         <svg className="pointer-events-none absolute inset-0 h-full w-full">

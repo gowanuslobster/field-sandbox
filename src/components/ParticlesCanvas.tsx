@@ -2,13 +2,13 @@
 
 import { useCallback, useEffect, useRef } from "react";
 import {
-  MAX_PARTICLE_SPEED,
-  MAX_SUBSTEPS_PER_FRAME,
   DEFAULT_TEST_PARTICLE_CHARGE,
   DEFAULT_TEST_PARTICLE_MASS,
-  PHYSICS_BASE_DT,
+  kineticEnergyOfParticle,
+  PARTICLE_SUBSTEPS_PER_FRAME,
   SIMULATION_SPEED,
   symplecticEulerCromerParticleStep,
+  totalEnergyOfParticle,
   TRAIL_SAMPLE_EVERY_N_SUBSTEPS,
   toTestParticle,
 } from "@/physics/dynamics";
@@ -37,6 +37,14 @@ export type ParticlesController = {
   setFrozen: SetParticleFrozen;
   launch: LaunchParticle;
 };
+export type ParticleEnergySnapshot = {
+  particleId: string;
+  totalEnergy: number;
+  kineticEnergy: number;
+  potentialEnergy: number;
+  baselineEnergy: number;
+  driftPercent: number;
+};
 
 type ParticleSimulationState = {
   id: string;
@@ -54,11 +62,13 @@ type ParticlesCanvasProps = {
   className?: string;
   onControllerReady?: (controller: ParticlesController | null) => void;
   onParticleCountChange?: (count: number) => void;
+  onEnergySnapshotChange?: (snapshot: ParticleEnergySnapshot | null) => void;
 };
 
 const MAX_HISTORY_POINTS = 64;
 const VELOCITY_RESET_TRAIL_THRESHOLD = 1.2;
 const SPAWN_FREEZE_MS = 500;
+const MAX_PARTICLE_SPEED = 1.2;
 
 function inBounds(point: Vector2Like, bounds: WorldBounds): boolean {
   return (
@@ -84,6 +94,7 @@ export function ParticlesCanvas({
   className,
   onControllerReady,
   onParticleCountChange,
+  onEnergySnapshotChange,
 }: ParticlesCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const chargesRef = useRef(charges);
@@ -94,6 +105,8 @@ export function ParticlesCanvas({
   const frameTimeRef = useRef<number | null>(null);
   const idCounterRef = useRef(0);
   const particleCountRef = useRef(0);
+  const trackedEnergyParticleIdRef = useRef<string | null>(null);
+  const baselineEnergyRef = useRef<number | null>(null);
   const needsRenderRef = useRef(true);
   const requestRenderRef = useRef<(() => void) | null>(null);
 
@@ -105,6 +118,56 @@ export function ParticlesCanvas({
     particleCountRef.current = nextCount;
     onParticleCountChange?.(nextCount);
   }, [onParticleCountChange]);
+
+  const emitEnergySnapshot = useCallback(() => {
+    if (!onEnergySnapshotChange) {
+      return;
+    }
+    const states = particlesRef.current;
+    if (states.length === 0) {
+      trackedEnergyParticleIdRef.current = null;
+      baselineEnergyRef.current = null;
+      onEnergySnapshotChange(null);
+      return;
+    }
+
+    const activeStates = states.filter((state) => !state.frozen);
+    if (activeStates.length === 0) {
+      trackedEnergyParticleIdRef.current = null;
+      baselineEnergyRef.current = null;
+      onEnergySnapshotChange(null);
+      return;
+    }
+
+    const trackedState =
+      activeStates.find((state) => state.id === trackedEnergyParticleIdRef.current) ??
+      activeStates[0]!;
+    const totalEnergy = totalEnergyOfParticle(trackedState.particle, chargesRef.current);
+    const kineticEnergy = kineticEnergyOfParticle(trackedState.particle);
+    const potentialEnergy = totalEnergy - kineticEnergy;
+
+    if (trackedEnergyParticleIdRef.current !== trackedState.id) {
+      trackedEnergyParticleIdRef.current = trackedState.id;
+      baselineEnergyRef.current = totalEnergy;
+    } else if (baselineEnergyRef.current === null) {
+      baselineEnergyRef.current = totalEnergy;
+    }
+
+    const baselineEnergy = baselineEnergyRef.current ?? totalEnergy;
+    const driftPercent =
+      Math.abs(baselineEnergy) > 1e-10
+        ? ((totalEnergy - baselineEnergy) / Math.abs(baselineEnergy)) * 100
+        : 0;
+
+    onEnergySnapshotChange({
+      particleId: trackedState.id,
+      totalEnergy,
+      kineticEnergy,
+      potentialEnergy,
+      baselineEnergy,
+      driftPercent,
+    });
+  }, [onEnergySnapshotChange]);
 
   const spawnParticle = useCallback<SpawnParticle>(
     (position) => {
@@ -124,6 +187,7 @@ export function ParticlesCanvas({
       };
       particlesRef.current.push(nextState);
       emitParticleCount();
+      emitEnergySnapshot();
       needsRenderRef.current = true;
       requestRenderRef.current?.();
       return {
@@ -132,15 +196,16 @@ export function ParticlesCanvas({
         vel: nextState.particle.vel,
       };
     },
-    [emitParticleCount],
+    [emitEnergySnapshot, emitParticleCount],
   );
 
   const clearParticles = useCallback<ClearParticles>(() => {
     particlesRef.current = [];
     emitParticleCount();
+    emitEnergySnapshot();
     needsRenderRef.current = true;
     requestRenderRef.current?.();
-  }, [emitParticleCount]);
+  }, [emitEnergySnapshot, emitParticleCount]);
 
   const pickAt = useCallback<PickParticle>((worldPosition, radiusWorld) => {
     const radiusSquared = radiusWorld * radiusWorld;
@@ -189,7 +254,8 @@ export function ParticlesCanvas({
     );
     needsRenderRef.current = true;
     requestRenderRef.current?.();
-  }, []);
+    emitEnergySnapshot();
+  }, [emitEnergySnapshot]);
 
   const launchParticle = useCallback<LaunchParticle>((id, velocity) => {
     particlesRef.current = particlesRef.current.map((state) => {
@@ -214,7 +280,8 @@ export function ParticlesCanvas({
     });
     needsRenderRef.current = true;
     requestRenderRef.current?.();
-  }, []);
+    emitEnergySnapshot();
+  }, [emitEnergySnapshot]);
 
   useEffect(() => {
     onControllerReady?.({
@@ -236,9 +303,10 @@ export function ParticlesCanvas({
 
   useEffect(() => {
     chargesRef.current = charges;
+    emitEnergySnapshot();
     needsRenderRef.current = true;
     requestRenderRef.current?.();
-  }, [charges]);
+  }, [charges, emitEnergySnapshot]);
 
   useEffect(() => {
     boundsRef.current = bounds;
@@ -293,10 +361,7 @@ export function ParticlesCanvas({
 
       const nextParticles: ParticleSimulationState[] = [];
       const targetDt = Math.max(0.0001, dt);
-      const substeps = Math.max(
-        1,
-        Math.min(MAX_SUBSTEPS_PER_FRAME, Math.ceil(targetDt / PHYSICS_BASE_DT)),
-      );
+      const substeps = PARTICLE_SUBSTEPS_PER_FRAME;
       const substepDt = targetDt / substeps;
       for (const state of particlesRef.current) {
         const thawedState =
@@ -358,6 +423,7 @@ export function ParticlesCanvas({
       }
       particlesRef.current = nextParticles;
       emitParticleCount();
+      emitEnergySnapshot();
     };
 
     const draw = () => {
@@ -466,7 +532,7 @@ export function ParticlesCanvas({
       }
       resizeObserver.disconnect();
     };
-  }, [emitParticleCount]);
+  }, [emitEnergySnapshot, emitParticleCount]);
 
   return (
     <canvas ref={canvasRef} className={`${className ?? ""} block h-full w-full`} />
