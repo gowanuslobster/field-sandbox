@@ -30,10 +30,15 @@ import {
 
 type Mode = "select" | "add_positive" | "add_negative" | "drop_test_charge";
 type SlingshotPreview = {
-  particleId: string;
+  particleId: string | null;
   origin: Vector2Like;
   cursor: Vector2Like;
   plannedVelocity: Vector2Like;
+};
+type SlingshotSession = {
+  particleId: string | null;
+  origin: Vector2Like;
+  spawnOnRelease: boolean;
 };
 
 const CHARGE_RADIUS_PX = 13;
@@ -76,9 +81,7 @@ function toChargeClass(value: number, selected: boolean): string {
 export function ElectricFieldSandbox() {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const dragStateRef = useRef<{ chargeId: string } | null>(null);
-  const slingshotRef = useRef<{ particleId: string; origin: Vector2Like } | null>(
-    null,
-  );
+  const slingshotRef = useRef<SlingshotSession | null>(null);
   const slingshotPreviewRef = useRef<SlingshotPreview | null>(null);
   const probeDragRef = useRef(false);
   const particleSpawnerRef = useRef<
@@ -105,6 +108,7 @@ export function ElectricFieldSandbox() {
     startOffsetY: number;
   } | null>(null);
   const isSpacePressedRef = useRef(false);
+  const modeRef = useRef<Mode>("select");
   const cameraRef = useRef({ offsetX: 0, offsetY: 0 });
   const zoomRef = useRef(1);
   const chargesRef = useRef(INITIAL_CHARGES);
@@ -138,6 +142,10 @@ export function ElectricFieldSandbox() {
   });
   const [slingshotPreview, setSlingshotPreview] =
     useState<SlingshotPreview | null>(null);
+  const setInteractionMode = useCallback((nextMode: Mode) => {
+    modeRef.current = nextMode;
+    setMode(nextMode);
+  }, []);
   const handleParticleControllerReady = useCallback(
     (controller: ParticlesController | null) => {
       particleSpawnerRef.current = controller?.spawn ?? null;
@@ -241,6 +249,10 @@ export function ElectricFieldSandbox() {
   }, [zoom]);
 
   useEffect(() => {
+    modeRef.current = mode;
+  }, [mode]);
+
+  useEffect(() => {
     boundsRef.current = viewBounds;
   }, [viewBounds]);
 
@@ -332,7 +344,7 @@ export function ElectricFieldSandbox() {
     dragStateRef.current = { chargeId };
     setIsDraggingCharge(true);
     setSelectedChargeId(chargeId);
-    setMode("select");
+    setInteractionMode("select");
   };
 
   const removeSelectedCharge = useCallback(() => {
@@ -416,14 +428,22 @@ export function ElectricFieldSandbox() {
 
     const onPointerUp = () => {
       if (slingshotRef.current) {
-        const particleId = slingshotRef.current.particleId;
-        if (slingshotPreviewRef.current) {
-          particleLaunchRef.current?.(
-            particleId,
-            slingshotPreviewRef.current.plannedVelocity,
-          );
-        } else {
-          particleFreezeRef.current?.(particleId, false);
+        const session = slingshotRef.current;
+        const plannedVelocity = slingshotPreviewRef.current?.plannedVelocity ?? {
+          x: 0,
+          y: 0,
+        };
+        if (session.spawnOnRelease) {
+          const spawned = particleSpawnerRef.current?.(session.origin);
+          if (spawned) {
+            particleLaunchRef.current?.(spawned.id, plannedVelocity);
+          }
+        } else if (session.particleId) {
+          if (slingshotPreviewRef.current) {
+            particleLaunchRef.current?.(session.particleId, plannedVelocity);
+          } else {
+            particleFreezeRef.current?.(session.particleId, false);
+          }
         }
         slingshotRef.current = null;
         setSlingshotPreview(null);
@@ -473,7 +493,11 @@ export function ElectricFieldSandbox() {
   }, [removeSelectedCharge]);
 
   const handleCanvasPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (event.button === 0 && mode !== "add_positive" && mode !== "add_negative") {
+    const interactionMode = modeRef.current;
+    if (
+      event.button === 0 &&
+      interactionMode === "select"
+    ) {
       const world = getWorldFromClientPoint(event.clientX, event.clientY);
       if (world) {
         const worldPerPixel =
@@ -485,6 +509,7 @@ export function ElectricFieldSandbox() {
           slingshotRef.current = {
             particleId: hit.id,
             origin: hit.pos,
+            spawnOnRelease: false,
           };
           particleFreezeRef.current?.(hit.id, true);
           const preview: SlingshotPreview = {
@@ -500,9 +525,14 @@ export function ElectricFieldSandbox() {
       }
     }
 
+    if (interactionMode === "drop_test_charge" && event.button === 0) {
+      return;
+    }
+
     const shouldPan =
       event.button === 2 ||
-      (event.button === 0 && (isSpacePressedRef.current || mode === "select"));
+      (event.button === 0 &&
+        (isSpacePressedRef.current || interactionMode === "select"));
     if (shouldPan) {
       event.preventDefault();
       setSelectedChargeId(null);
@@ -524,26 +554,7 @@ export function ElectricFieldSandbox() {
       return;
     }
 
-    if (mode === "drop_test_charge") {
-      const spawned = particleSpawnerRef.current?.(world);
-      if (spawned) {
-        slingshotRef.current = {
-          particleId: spawned.id,
-          origin: spawned.pos,
-        };
-        const preview: SlingshotPreview = {
-          particleId: spawned.id,
-          origin: spawned.pos,
-          cursor: world,
-          plannedVelocity: { x: 0, y: 0 },
-        };
-        slingshotPreviewRef.current = preview;
-        setSlingshotPreview(preview);
-      }
-      return;
-    }
-
-    const value = mode === "add_positive" ? 1 : -1;
+    const value = interactionMode === "add_positive" ? 1 : -1;
     const id = nextChargeId();
     setCharges((current) => {
       const newCharge: Charge = {
@@ -620,6 +631,57 @@ export function ElectricFieldSandbox() {
       )
     : 0;
 
+  const handleCanvasPointerDownCapture = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      if (event.button !== 0 || modeRef.current !== "drop_test_charge") {
+        return;
+      }
+      if (slingshotRef.current) {
+        return;
+      }
+      const world = getWorldFromClientPoint(event.clientX, event.clientY);
+      if (!world) {
+        return;
+      }
+
+      const worldPerPixel =
+        (viewBounds.maxX - viewBounds.minX) / Math.max(size.width, 1);
+      const hit = particlePickRef.current?.(world, worldPerPixel * 60);
+      if (hit) {
+        slingshotRef.current = {
+          particleId: hit.id,
+          origin: hit.pos,
+          spawnOnRelease: false,
+        };
+        particleFreezeRef.current?.(hit.id, true);
+        const preview: SlingshotPreview = {
+          particleId: hit.id,
+          origin: hit.pos,
+          cursor: world,
+          plannedVelocity: { x: 0, y: 0 },
+        };
+        slingshotPreviewRef.current = preview;
+        setSlingshotPreview(preview);
+        return;
+      }
+
+      slingshotRef.current = {
+        particleId: null,
+        origin: world,
+        spawnOnRelease: true,
+      };
+      const preview: SlingshotPreview = {
+        particleId: null,
+        origin: world,
+        cursor: world,
+        plannedVelocity: { x: 0, y: 0 },
+      };
+      slingshotPreviewRef.current = preview;
+      setSlingshotPreview(preview);
+    },
+    [getWorldFromClientPoint, size.width, viewBounds.maxX, viewBounds.minX],
+  );
+
   return (
     <section className="h-dvh w-full bg-[#0F0F0F] text-zinc-100">
       <div className="absolute left-4 top-4 z-20 w-[330px] rounded-2xl border border-cyan-300/20 bg-black/65 p-4 shadow-[0_0_36px_rgba(56,189,248,0.2)] backdrop-blur-md">
@@ -634,7 +696,7 @@ export function ElectricFieldSandbox() {
         <div className="mt-2 grid grid-cols-2 gap-2">
           <button
             type="button"
-            onClick={() => setMode("select")}
+            onClick={() => setInteractionMode("select")}
             className={`rounded-md px-3 py-2 text-sm transition-all duration-200 ${
               mode === "select"
                 ? "bg-white text-black shadow-[0_0_20px_rgba(255,255,255,0.35)]"
@@ -645,7 +707,7 @@ export function ElectricFieldSandbox() {
           </button>
           <button
             type="button"
-            onClick={() => setMode("add_positive")}
+            onClick={() => setInteractionMode("add_positive")}
             className={`rounded-md px-3 py-2 text-sm transition-all duration-200 ${
               mode === "add_positive"
                 ? "bg-orange-300 text-black shadow-[0_0_20px_rgba(255,160,90,0.45)]"
@@ -656,7 +718,7 @@ export function ElectricFieldSandbox() {
           </button>
           <button
             type="button"
-            onClick={() => setMode("add_negative")}
+            onClick={() => setInteractionMode("add_negative")}
             className={`rounded-md px-3 py-2 text-sm transition-all duration-200 ${
               mode === "add_negative"
                 ? "bg-cyan-200 text-black shadow-[0_0_20px_rgba(94,220,255,0.45)]"
@@ -674,7 +736,7 @@ export function ElectricFieldSandbox() {
           </button>
           <button
             type="button"
-            onClick={() => setMode("drop_test_charge")}
+            onClick={() => setInteractionMode("drop_test_charge")}
             className={`col-span-2 rounded-md px-3 py-2 text-sm transition-all duration-200 ${
               mode === "drop_test_charge"
                 ? "bg-amber-200 text-black shadow-[0_0_20px_rgba(255,226,153,0.42)]"
@@ -690,7 +752,7 @@ export function ElectricFieldSandbox() {
               slingshotPreviewRef.current = null;
               setSlingshotPreview(null);
               particleClearRef.current?.();
-              setMode("select");
+              setInteractionMode("select");
             }}
             className="col-span-2 rounded-md bg-cyan-300/20 px-3 py-2 text-sm text-cyan-100 transition-colors duration-200 hover:bg-cyan-300/35"
           >
@@ -887,6 +949,7 @@ export function ElectricFieldSandbox() {
 
       <div
         ref={containerRef}
+        onPointerDownCapture={handleCanvasPointerDownCapture}
         onPointerDown={handleCanvasPointerDown}
         onPointerUp={() => {
           panStateRef.current = null;
@@ -1057,6 +1120,9 @@ export function ElectricFieldSandbox() {
             if (event.button !== 0) {
               return;
             }
+            if (modeRef.current === "drop_test_charge") {
+              return;
+            }
             event.stopPropagation();
             probeDragRef.current = true;
           }}
@@ -1082,6 +1148,9 @@ export function ElectricFieldSandbox() {
               type="button"
               onPointerDown={(event) => {
                 if (event.button === 2 || isSpacePressedRef.current) {
+                  return;
+                }
+                if (modeRef.current === "drop_test_charge") {
                   return;
                 }
                 event.stopPropagation();
