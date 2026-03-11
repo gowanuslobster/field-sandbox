@@ -2,9 +2,14 @@
 
 import { useCallback, useEffect, useRef } from "react";
 import {
+  MAX_PARTICLE_SPEED,
+  MAX_SUBSTEPS_PER_FRAME,
   DEFAULT_TEST_PARTICLE_CHARGE,
   DEFAULT_TEST_PARTICLE_MASS,
+  PHYSICS_BASE_DT,
+  SIMULATION_SPEED,
   symplecticEulerCromerParticleStep,
+  TRAIL_SAMPLE_EVERY_N_SUBSTEPS,
   toTestParticle,
 } from "@/physics/dynamics";
 import type { Charge, WorldBounds } from "@/physics/types";
@@ -51,8 +56,7 @@ type ParticlesCanvasProps = {
   onParticleCountChange?: (count: number) => void;
 };
 
-const MAX_HISTORY_POINTS = 50;
-const MAX_PARTICLE_SPEED = 3.8;
+const MAX_HISTORY_POINTS = 64;
 const VELOCITY_RESET_TRAIL_THRESHOLD = 1.2;
 const SPAWN_FREEZE_MS = 500;
 
@@ -63,6 +67,13 @@ function inBounds(point: Vector2Like, bounds: WorldBounds): boolean {
     point.y >= bounds.minY &&
     point.y <= bounds.maxY
   );
+}
+
+function appendHistory(history: Vector2D[], point: Vector2D): Vector2D[] {
+  if (history.length >= MAX_HISTORY_POINTS) {
+    return [...history.slice(1), point];
+  }
+  return [...history, point];
 }
 
 export function ParticlesCanvas({
@@ -281,6 +292,12 @@ export function ParticlesCanvas({
       }
 
       const nextParticles: ParticleSimulationState[] = [];
+      const targetDt = Math.max(0.0001, dt);
+      const substeps = Math.max(
+        1,
+        Math.min(MAX_SUBSTEPS_PER_FRAME, Math.ceil(targetDt / PHYSICS_BASE_DT)),
+      );
+      const substepDt = targetDt / substeps;
       for (const state of particlesRef.current) {
         const thawedState =
           state.frozen &&
@@ -292,25 +309,47 @@ export function ParticlesCanvas({
           nextParticles.push(thawedState);
           continue;
         }
-        const stepped = symplecticEulerCromerParticleStep(
-          thawedState.particle,
-          chargesRef.current,
-          dt,
-        );
-        const speed = stepped.vel.magnitude();
-        const cappedVelocity =
-          speed > MAX_PARTICLE_SPEED
-            ? stepped.vel.scale(MAX_PARTICLE_SPEED / speed)
-            : stepped.vel;
-        const nextParticle = { ...stepped, vel: cappedVelocity };
-        if (!inBounds(nextParticle.pos, despawnBoundsRef.current)) {
+
+        let nextParticle = thawedState.particle;
+        let nextHistory = thawedState.history;
+        let shouldDespawn = false;
+        for (let stepIndex = 0; stepIndex < substeps; stepIndex += 1) {
+          const stepped = symplecticEulerCromerParticleStep(
+            nextParticle,
+            chargesRef.current,
+            substepDt,
+          );
+          const speed = stepped.vel.magnitude();
+          const cappedVelocity =
+            speed > MAX_PARTICLE_SPEED
+              ? stepped.vel.scale(MAX_PARTICLE_SPEED / speed)
+              : stepped.vel;
+          const correctedPosition = nextParticle.pos.add(
+            cappedVelocity.scale(substepDt * SIMULATION_SPEED),
+          );
+          nextParticle = {
+            ...stepped,
+            vel: cappedVelocity,
+            pos: correctedPosition,
+          };
+
+          if (!inBounds(nextParticle.pos, despawnBoundsRef.current)) {
+            shouldDespawn = true;
+            break;
+          }
+
+          const shouldSampleTrail =
+            stepIndex === substeps - 1 ||
+            (stepIndex + 1) % TRAIL_SAMPLE_EVERY_N_SUBSTEPS === 0;
+          if (shouldSampleTrail) {
+            nextHistory = appendHistory(nextHistory, nextParticle.pos);
+          }
+        }
+
+        if (shouldDespawn) {
           continue;
         }
 
-        const nextHistory =
-          thawedState.history.length >= MAX_HISTORY_POINTS
-            ? [...thawedState.history.slice(1), nextParticle.pos]
-            : [...thawedState.history, nextParticle.pos];
         nextParticles.push({
           ...thawedState,
           particle: nextParticle,
@@ -342,32 +381,47 @@ export function ParticlesCanvas({
       for (const state of particlesRef.current) {
         if (state.history.length > 1) {
           context.beginPath();
-          for (let index = 0; index < state.history.length; index += 1) {
-            const sample = transformWorldPoint(state.history[index], transform);
-            if (index === 0) {
-              context.moveTo(sample.x, sample.y);
-            } else {
-              context.lineTo(sample.x, sample.y);
+          const firstPoint = transformWorldPoint(state.history[0], transform);
+          context.moveTo(firstPoint.x, firstPoint.y);
+          if (state.history.length === 2) {
+            const secondPoint = transformWorldPoint(state.history[1], transform);
+            context.lineTo(secondPoint.x, secondPoint.y);
+          } else {
+            for (let index = 1; index < state.history.length - 1; index += 1) {
+              const current = transformWorldPoint(state.history[index], transform);
+              const next = transformWorldPoint(state.history[index + 1], transform);
+              const midX = (current.x + next.x) * 0.5;
+              const midY = (current.y + next.y) * 0.5;
+              context.quadraticCurveTo(current.x, current.y, midX, midY);
             }
+            const penultimate = transformWorldPoint(
+              state.history[state.history.length - 2],
+              transform,
+            );
+            const last = transformWorldPoint(
+              state.history[state.history.length - 1],
+              transform,
+            );
+            context.quadraticCurveTo(penultimate.x, penultimate.y, last.x, last.y);
           }
-          context.strokeStyle = "rgba(122, 255, 220, 0.62)";
-          context.lineWidth = 2;
+          context.strokeStyle = "rgba(255, 242, 184, 0.82)";
+          context.lineWidth = 2.2;
           context.stroke();
         }
 
         const head = transformWorldPoint(state.particle.pos, transform);
-        context.shadowColor = "rgba(88, 255, 198, 0.95)";
-        context.shadowBlur = 14;
-        context.fillStyle = "rgba(176, 255, 228, 0.98)";
+        context.shadowColor = "rgba(255, 230, 126, 0.98)";
+        context.shadowBlur = 16;
+        context.fillStyle = "rgba(255, 245, 182, 0.98)";
         context.beginPath();
-        context.arc(head.x, head.y, 4.8, 0, Math.PI * 2);
+        context.arc(head.x, head.y, 5.2, 0, Math.PI * 2);
         context.fill();
-        context.strokeStyle = "rgba(3, 34, 30, 0.7)";
-        context.lineWidth = 1.1;
+        context.strokeStyle = "rgba(43, 31, 4, 0.72)";
+        context.lineWidth = 1.15;
         context.stroke();
-        context.fillStyle = "rgba(235, 255, 246, 0.95)";
+        context.fillStyle = "rgba(255, 255, 236, 0.97)";
         context.beginPath();
-        context.arc(head.x, head.y, 1.9, 0, Math.PI * 2);
+        context.arc(head.x, head.y, 2, 0, Math.PI * 2);
         context.fill();
       }
 

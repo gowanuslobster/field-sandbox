@@ -39,7 +39,7 @@ type SlingshotPreview = {
 const CHARGE_RADIUS_PX = 13;
 const MIN_ZOOM = 0.1;
 const MAX_ZOOM = 6.5;
-const SLINGSHOT_DRAG_TO_VELOCITY = 7.5;
+const SLINGSHOT_DRAG_TO_VELOCITY = 4.8;
 
 const INITIAL_CHARGES: Charge[] = [
   { id: "q1", position: { x: -0.72, y: 0 }, value: 1 },
