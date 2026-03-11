@@ -5,10 +5,11 @@ import { Vector2D, type Vector2Like } from "@/physics/vector2d";
 export const SIMULATION_SPEED = 1.6;
 export const DEFAULT_TEST_PARTICLE_CHARGE = 10;
 export const DEFAULT_TEST_PARTICLE_MASS = 1;
-export const PARTICLE_SUBSTEPS_PER_FRAME = 20;
+export const PHYSICS_BASE_DT = 0.00025;
+export const MAX_SUBSTEPS_PER_FRAME = 96;
 export const TRAIL_SAMPLE_EVERY_N_SUBSTEPS = 3;
-// ~8px at the default zoom/viewport scale for stable near-source dynamics.
-export const PARTICLE_PLUMMER_EPSILON = 0.02;
+// Softening tuned to avoid near-center stiffness artifacts in UI integration.
+export const PARTICLE_PLUMMER_EPSILON = 0.05;
 
 export type TestParticle = {
   pos: Vector2D;

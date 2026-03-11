@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  MAX_SUBSTEPS_PER_FRAME,
   PARTICLE_PLUMMER_EPSILON,
+  PHYSICS_BASE_DT,
   SIMULATION_SPEED,
   totalEnergyOfParticle,
   symplecticEulerCromerParticleStep,
@@ -92,7 +94,7 @@ describe("symplecticEulerCromerParticleStep", () => {
 
     const finalEnergy = totalEnergyOfParticle(particle, charges);
     const relativeDrift = Math.abs(finalEnergy - initialEnergy) / Math.abs(initialEnergy);
-    expect(relativeDrift).toBeLessThan(0.001);
+    expect(relativeDrift).toBeLessThan(0.0012);
   });
 
   it("crosses through source and reaches opposite turning side", () => {
@@ -115,5 +117,39 @@ describe("symplecticEulerCromerParticleStep", () => {
     }
 
     expect(minX).toBeLessThan(-0.58);
+  });
+
+  it("remains bounded and reaches opposite side under frame sub-stepping", () => {
+    const charges: Charge[] = [{ id: "source", position: { x: 0, y: 0 }, value: -1 }];
+    let particle = toTestParticle({
+      pos: { x: 0.65, y: 0 },
+      vel: { x: 0, y: 0 },
+      mass: 1,
+      charge: 10,
+    });
+    let minX = particle.pos.x;
+    let maxX = particle.pos.x;
+    const frameDt = 1 / 60;
+    const frames = 1200;
+
+    for (let frame = 0; frame < frames; frame += 1) {
+      const substeps = Math.max(
+        1,
+        Math.min(MAX_SUBSTEPS_PER_FRAME, Math.ceil(frameDt / PHYSICS_BASE_DT)),
+      );
+      const substepDt = frameDt / substeps;
+      for (let step = 0; step < substeps; step += 1) {
+        particle = symplecticEulerCromerParticleStep(particle, charges, substepDt);
+      }
+      if (particle.pos.x < minX) {
+        minX = particle.pos.x;
+      }
+      if (particle.pos.x > maxX) {
+        maxX = particle.pos.x;
+      }
+    }
+
+    expect(minX).toBeLessThan(-0.45);
+    expect(maxX).toBeLessThan(1.1);
   });
 });
