@@ -21,6 +21,14 @@ import {
 } from "@/components/ParticlesCanvas";
 import { VectorFieldCanvas } from "@/components/VectorFieldCanvas";
 import { calculateFieldAt, potentialAtPoint } from "@/physics/electrostatics";
+import {
+  calculateGhostOrbitSuggestion,
+  DEFAULT_TEST_PARTICLE_CHARGE,
+  DEFAULT_TEST_PARTICLE_MASS,
+  type GhostOrbitSuggestion,
+  isGhostOrbitMatch,
+  PARTICLE_PLUMMER_EPSILON,
+} from "@/physics/dynamics";
 import type { Charge, WorldBounds } from "@/physics/types";
 import type { Vector2Like } from "@/physics/vector2d";
 import {
@@ -35,11 +43,15 @@ type SlingshotPreview = {
   origin: Vector2Like;
   cursor: Vector2Like;
   plannedVelocity: Vector2Like;
+  ghostSuggestion: GhostOrbitSuggestion | null;
+  ghostAnchor: Vector2Like;
 };
 type SlingshotSession = {
   particleId: string | null;
   origin: Vector2Like;
   spawnOnRelease: boolean;
+  ghostSuggestion: GhostOrbitSuggestion | null;
+  ghostAnchor: Vector2Like;
 };
 
 const CHARGE_RADIUS_PX = 13;
@@ -386,7 +398,8 @@ export function ElectricFieldSandbox() {
       }
 
       if (slingshotRef.current) {
-        const origin = slingshotRef.current.origin;
+        const session = slingshotRef.current;
+        const origin = session.origin;
         const dragVector = {
           x: world.x - origin.x,
           y: world.y - origin.y,
@@ -396,16 +409,20 @@ export function ElectricFieldSandbox() {
           y: dragVector.y * SLINGSHOT_DRAG_TO_VELOCITY,
         };
         setSlingshotPreview({
-          particleId: slingshotRef.current.particleId,
+          particleId: session.particleId,
           origin,
           cursor: world,
           plannedVelocity,
+          ghostSuggestion: session.ghostSuggestion,
+          ghostAnchor: session.ghostAnchor,
         });
         slingshotPreviewRef.current = {
-          particleId: slingshotRef.current.particleId,
+          particleId: session.particleId,
           origin,
           cursor: world,
           plannedVelocity,
+          ghostSuggestion: session.ghostSuggestion,
+          ghostAnchor: session.ghostAnchor,
         };
         return;
       }
@@ -501,6 +518,17 @@ export function ElectricFieldSandbox() {
       if (!world) {
         return;
       }
+      const initialGhostSuggestion =
+        modeRef.current === "drop_test_charge"
+          ? calculateGhostOrbitSuggestion(
+              world,
+              { x: 0, y: 0 },
+              chargesRef.current,
+              DEFAULT_TEST_PARTICLE_CHARGE,
+              DEFAULT_TEST_PARTICLE_MASS,
+              { softening: PARTICLE_PLUMMER_EPSILON, interactionMode: "electric" },
+            )
+          : null;
 
       const worldPerPixel =
         (viewBounds.maxX - viewBounds.minX) / Math.max(size.width, 1);
@@ -510,6 +538,8 @@ export function ElectricFieldSandbox() {
           particleId: hit.id,
           origin: hit.pos,
           spawnOnRelease: false,
+          ghostSuggestion: initialGhostSuggestion,
+          ghostAnchor: world,
         };
         particleFreezeRef.current?.(hit.id, true);
         const preview: SlingshotPreview = {
@@ -517,6 +547,8 @@ export function ElectricFieldSandbox() {
           origin: hit.pos,
           cursor: world,
           plannedVelocity: { x: 0, y: 0 },
+          ghostSuggestion: initialGhostSuggestion,
+          ghostAnchor: world,
         };
         slingshotPreviewRef.current = preview;
         setSlingshotPreview(preview);
@@ -527,12 +559,16 @@ export function ElectricFieldSandbox() {
         particleId: null,
         origin: world,
         spawnOnRelease: true,
+        ghostSuggestion: initialGhostSuggestion,
+        ghostAnchor: world,
       };
       const preview: SlingshotPreview = {
         particleId: null,
         origin: world,
         cursor: world,
         plannedVelocity: { x: 0, y: 0 },
+        ghostSuggestion: initialGhostSuggestion,
+        ghostAnchor: world,
       };
       slingshotPreviewRef.current = preview;
       setSlingshotPreview(preview);
@@ -558,6 +594,8 @@ export function ElectricFieldSandbox() {
             particleId: hit.id,
             origin: hit.pos,
             spawnOnRelease: false,
+            ghostSuggestion: null,
+            ghostAnchor: world,
           };
           particleFreezeRef.current?.(hit.id, true);
           const preview: SlingshotPreview = {
@@ -565,6 +603,8 @@ export function ElectricFieldSandbox() {
             origin: hit.pos,
             cursor: world,
             plannedVelocity: { x: 0, y: 0 },
+            ghostSuggestion: null,
+            ghostAnchor: world,
           };
           slingshotPreviewRef.current = preview;
           setSlingshotPreview(preview);
@@ -681,6 +721,56 @@ export function ElectricFieldSandbox() {
         slingshotPreview.plannedVelocity.y,
       )
     : 0;
+  const ghostOrbitSuggestion =
+    mode === "drop_test_charge" ? slingshotPreview?.ghostSuggestion ?? null : null;
+  const ghostOrbitMatch =
+    slingshotPreview && ghostOrbitSuggestion
+      ? isGhostOrbitMatch(
+          slingshotPreview.plannedVelocity,
+          ghostOrbitSuggestion.targetVelocity,
+        )
+      : false;
+  const ghostArrowWorldEnd =
+    slingshotPreview && ghostOrbitSuggestion
+        ? {
+          x:
+            slingshotPreview.ghostAnchor.x +
+            ghostOrbitSuggestion.targetVelocity.x / SLINGSHOT_DRAG_TO_VELOCITY,
+          y:
+            slingshotPreview.ghostAnchor.y +
+            ghostOrbitSuggestion.targetVelocity.y / SLINGSHOT_DRAG_TO_VELOCITY,
+        }
+      : null;
+  const ghostArrowStartScreen =
+    slingshotPreview && ghostOrbitSuggestion
+      ? worldToScreen(
+          slingshotPreview.ghostAnchor,
+          viewBounds,
+          size.width,
+          size.height,
+        )
+      : null;
+  const ghostArrowEndScreen =
+    ghostArrowWorldEnd && ghostOrbitSuggestion
+      ? worldToScreen(ghostArrowWorldEnd, viewBounds, size.width, size.height)
+      : null;
+  const ghostArrowDx =
+    ghostArrowStartScreen && ghostArrowEndScreen
+      ? ghostArrowEndScreen.x - ghostArrowStartScreen.x
+      : 0;
+  const ghostArrowDy =
+    ghostArrowStartScreen && ghostArrowEndScreen
+      ? ghostArrowEndScreen.y - ghostArrowStartScreen.y
+      : 0;
+  const ghostArrowLength = Math.hypot(ghostArrowDx, ghostArrowDy);
+  const ghostArrowUx = ghostArrowLength > 1e-6 ? ghostArrowDx / ghostArrowLength : 0;
+  const ghostArrowUy = ghostArrowLength > 1e-6 ? ghostArrowDy / ghostArrowLength : 0;
+  const ghostArrowColor = ghostOrbitMatch
+    ? "rgba(255, 214, 92, 0.98)"
+    : "rgba(159, 247, 255, 0.62)";
+  const ghostArrowGlowColor = ghostOrbitMatch
+    ? "rgba(255, 214, 92, 0.42)"
+    : "rgba(159, 247, 255, 0.18)";
 
   const handleCanvasPointerDownCapture = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -1053,6 +1143,86 @@ export function ElectricFieldSandbox() {
           className="pointer-events-none absolute inset-0 h-full w-full"
         />
         <svg className="pointer-events-none absolute inset-0 h-full w-full">
+          {ghostArrowStartScreen && ghostArrowEndScreen ? (
+            <>
+              <line
+                x1={ghostArrowStartScreen.x}
+                y1={ghostArrowStartScreen.y}
+                x2={ghostArrowEndScreen.x}
+                y2={ghostArrowEndScreen.y}
+                stroke={ghostArrowGlowColor}
+                strokeWidth={ghostOrbitMatch ? "8" : "5"}
+                strokeLinecap="round"
+              />
+              <line
+                x1={ghostArrowStartScreen.x}
+                y1={ghostArrowStartScreen.y}
+                x2={ghostArrowEndScreen.x}
+                y2={ghostArrowEndScreen.y}
+                stroke={ghostArrowColor}
+                strokeWidth={ghostOrbitMatch ? "3.6" : "2.4"}
+                strokeLinecap="round"
+                strokeDasharray="8 7"
+              />
+              <line
+                x1={ghostArrowEndScreen.x}
+                y1={ghostArrowEndScreen.y}
+                x2={
+                  ghostArrowEndScreen.x -
+                  ghostArrowUx * 10 -
+                  ghostArrowUy * 5.5
+                }
+                y2={
+                  ghostArrowEndScreen.y -
+                  ghostArrowUy * 10 +
+                  ghostArrowUx * 5.5
+                }
+                stroke={ghostArrowColor}
+                strokeWidth={ghostOrbitMatch ? "3.2" : "2.4"}
+                strokeLinecap="round"
+              />
+              <line
+                x1={ghostArrowEndScreen.x}
+                y1={ghostArrowEndScreen.y}
+                x2={
+                  ghostArrowEndScreen.x -
+                  ghostArrowUx * 10 +
+                  ghostArrowUy * 5.5
+                }
+                y2={
+                  ghostArrowEndScreen.y -
+                  ghostArrowUy * 10 -
+                  ghostArrowUx * 5.5
+                }
+                stroke={ghostArrowColor}
+                strokeWidth={ghostOrbitMatch ? "3.2" : "2.4"}
+                strokeLinecap="round"
+              />
+              {ghostOrbitMatch ? (
+                <>
+                  <rect
+                    x={ghostArrowEndScreen.x + 12}
+                    y={ghostArrowEndScreen.y - 26}
+                    width={118}
+                    height={20}
+                    rx={5}
+                    fill="rgba(26, 17, 0, 0.78)"
+                    stroke="rgba(255, 214, 92, 0.72)"
+                    strokeWidth="1"
+                  />
+                  <text
+                    x={ghostArrowEndScreen.x + 20}
+                    y={ghostArrowEndScreen.y - 12}
+                    fill="rgba(255, 238, 179, 0.98)"
+                    fontSize="12"
+                    fontWeight="700"
+                  >
+                    Stable Orbit Path
+                  </text>
+                </>
+              ) : null}
+            </>
+          ) : null}
           {slingshotOriginScreen && slingshotCursorScreen ? (
             <>
               <line

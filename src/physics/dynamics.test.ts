@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  calculateGhostOrbitSuggestion,
+  dominantSourceForceAtPoint,
+  forceFromSourceOnParticle,
+  isGhostOrbitMatch,
   MAX_SUBSTEPS_PER_FRAME,
   PARTICLE_PLUMMER_EPSILON,
   PHYSICS_BASE_DT,
@@ -215,5 +219,107 @@ describe("symplecticEulerCromerParticleStep", () => {
     expect(Math.abs((rightTurningPoint?.x ?? 0) - 0.65)).toBeLessThan(0.08);
     expect(rightTurningPoint?.speed ?? Number.POSITIVE_INFINITY).toBeLessThan(0.25);
     expect(Math.abs(rightTurningPoint?.y ?? Number.POSITIVE_INFINITY)).toBeLessThan(0.06);
+  });
+});
+
+describe("ghost orbit helpers", () => {
+  it("identifies the highest-magnitude source force at the cursor", () => {
+    const charges: Charge[] = [
+      { id: "far", position: { x: -1.2, y: 0 }, value: -4 },
+      { id: "near", position: { x: 0.4, y: 0 }, value: -1 },
+    ];
+
+    const dominant = dominantSourceForceAtPoint(
+      { x: 0, y: 0 },
+      charges,
+      10,
+      { softening: PARTICLE_PLUMMER_EPSILON },
+    );
+
+    expect(dominant?.source.id).toBe("near");
+    expect(dominant?.isAttractive).toBe(true);
+  });
+
+  it("marks like-charge electric interaction as repulsive", () => {
+    const sample = forceFromSourceOnParticle(
+      { x: 0.6, y: 0 },
+      { id: "source", position: { x: 0, y: 0 }, value: 1 },
+      10,
+      { softening: PARTICLE_PLUMMER_EPSILON },
+    );
+
+    expect(sample.isAttractive).toBe(false);
+    expect(sample.force.x).toBeGreaterThan(0);
+  });
+
+  it("suppresses the orbit guide when the dominant source is repulsive", () => {
+    const charges: Charge[] = [
+      { id: "dominant-repulsive", position: { x: 0.2, y: 0 }, value: 4 },
+      { id: "weaker-attractive", position: { x: -1.3, y: 0 }, value: -2 },
+    ];
+
+    const suggestion = calculateGhostOrbitSuggestion(
+      { x: 0, y: 0 },
+      { x: 0, y: 1 },
+      charges,
+      10,
+      1,
+      { softening: PARTICLE_PLUMMER_EPSILON },
+    );
+
+    expect(suggestion).toBeNull();
+  });
+
+  it("computes the softened circular orbit speed and tangent closest to drag", () => {
+    const charges: Charge[] = [
+      { id: "source", position: { x: 0, y: 0 }, value: -2 },
+    ];
+
+    const suggestion = calculateGhostOrbitSuggestion(
+      { x: 1, y: 0 },
+      { x: 0, y: -5 },
+      charges,
+      10,
+      2,
+      { softening: PARTICLE_PLUMMER_EPSILON },
+    );
+
+    expect(suggestion).not.toBeNull();
+    expect(suggestion?.targetVelocity.x ?? Number.NaN).toBeCloseTo(0, 8);
+    expect(suggestion?.targetVelocity.y ?? Number.NaN).toBeLessThan(0);
+
+    const sourceForceMagnitude = forceFromSourceOnParticle(
+      { x: 1, y: 0 },
+      charges[0]!,
+      10,
+      { softening: PARTICLE_PLUMMER_EPSILON },
+    ).forceMagnitude;
+    const expectedSpeed = Math.sqrt(
+      (sourceForceMagnitude *
+        Math.sqrt(1 + PARTICLE_PLUMMER_EPSILON * PARTICLE_PLUMMER_EPSILON)) /
+        2,
+    );
+    expect(suggestion?.targetSpeed ?? Number.NaN).toBeCloseTo(expectedSpeed, 8);
+  });
+
+  it("requires both magnitude and angle agreement for a stable-orbit match", () => {
+    expect(
+      isGhostOrbitMatch(
+        { x: 0, y: 1.03 },
+        { x: 0, y: 1 },
+      ),
+    ).toBe(true);
+    expect(
+      isGhostOrbitMatch(
+        { x: 0.3, y: 0.95 },
+        { x: 0, y: 1 },
+      ),
+    ).toBe(false);
+    expect(
+      isGhostOrbitMatch(
+        { x: 0, y: 1.08 },
+        { x: 0, y: 1 },
+      ),
+    ).toBe(false);
   });
 });

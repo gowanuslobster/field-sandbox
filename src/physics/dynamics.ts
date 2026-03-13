@@ -10,6 +10,26 @@ export const MAX_SUBSTEPS_PER_FRAME = 96;
 export const TRAIL_SAMPLE_EVERY_N_SUBSTEPS = 3;
 // Softening tuned to avoid near-center stiffness artifacts in UI integration.
 export const PARTICLE_PLUMMER_EPSILON = 0.05;
+export const GHOST_ORBIT_MATCH_MAGNITUDE_TOLERANCE = 0.05;
+export const GHOST_ORBIT_MATCH_ANGLE_TOLERANCE_DEGREES = 10;
+
+export type InteractionForceMode = "electric" | "gravitational";
+
+export type SourceForceSample = {
+  source: Charge;
+  displacement: Vector2D;
+  distance: number;
+  softenedDistance: number;
+  force: Vector2D;
+  forceMagnitude: number;
+  isAttractive: boolean;
+};
+
+export type GhostOrbitSuggestion = {
+  dominant: SourceForceSample;
+  targetVelocity: Vector2D;
+  targetSpeed: number;
+};
 
 export type TestParticle = {
   pos: Vector2D;
@@ -76,4 +96,123 @@ export function totalEnergyOfParticle(
   return (
     kineticEnergyOfParticle(particle) + potentialEnergyOfParticle(particle, charges)
   );
+}
+
+export function forceFromSourceOnParticle(
+  point: Vector2Like,
+  source: Charge,
+  particleChargeOrMass: number,
+  options?: { softening?: number; interactionMode?: InteractionForceMode },
+): SourceForceSample {
+  const softening = options?.softening ?? PARTICLE_PLUMMER_EPSILON;
+  const interactionMode = options?.interactionMode ?? "electric";
+  const displacement = Vector2D.from(point).subtract(source.position);
+  const distanceSquared = displacement.magnitudeSquared();
+  const softenedDistanceSquared = distanceSquared + softening * softening;
+  const softenedDistance = Math.sqrt(softenedDistanceSquared);
+  const distance = Math.sqrt(distanceSquared);
+  const invSoftenedDistanceCubed = 1 / (softenedDistanceSquared * softenedDistance);
+  const coupling =
+    interactionMode === "gravitational"
+      ? -Math.abs(particleChargeOrMass) * Math.abs(source.value)
+      : particleChargeOrMass * source.value;
+  const force = displacement.scale(coupling * invSoftenedDistanceCubed);
+
+  return {
+    source,
+    displacement,
+    distance,
+    softenedDistance,
+    force,
+    forceMagnitude: force.magnitude(),
+    isAttractive: force.dot(displacement) < 0,
+  };
+}
+
+export function dominantSourceForceAtPoint(
+  point: Vector2Like,
+  charges: Charge[],
+  particleChargeOrMass: number,
+  options?: { softening?: number; interactionMode?: InteractionForceMode },
+): SourceForceSample | null {
+  let dominant: SourceForceSample | null = null;
+
+  for (const source of charges) {
+    const sample = forceFromSourceOnParticle(point, source, particleChargeOrMass, {
+      softening: options?.softening,
+      interactionMode: options?.interactionMode,
+    });
+    if (!dominant || sample.forceMagnitude > dominant.forceMagnitude) {
+      dominant = sample;
+    }
+  }
+
+  return dominant;
+}
+
+export function calculateGhostOrbitSuggestion(
+  point: Vector2Like,
+  manualVelocity: Vector2Like,
+  charges: Charge[],
+  particleCharge: number,
+  particleMass: number,
+  options?: { softening?: number; interactionMode?: InteractionForceMode },
+): GhostOrbitSuggestion | null {
+  const dominant = dominantSourceForceAtPoint(point, charges, particleCharge, options);
+  if (!dominant || !dominant.isAttractive || dominant.distance < 1e-9) {
+    return null;
+  }
+
+  const clampedMass = Math.max(1e-6, particleMass);
+  const targetSpeed = Math.sqrt(
+    (dominant.forceMagnitude * dominant.softenedDistance) / clampedMass,
+  );
+  if (!Number.isFinite(targetSpeed) || targetSpeed <= 1e-9) {
+    return null;
+  }
+
+  const radial = dominant.displacement.normalized();
+  const tangentCcw = new Vector2D(-radial.y, radial.x);
+  const tangentCw = new Vector2D(radial.y, -radial.x);
+  const manual = Vector2D.from(manualVelocity);
+  const chosenTangent =
+    manual.dot(tangentCcw) >= manual.dot(tangentCw) ? tangentCcw : tangentCw;
+
+  return {
+    dominant,
+    targetSpeed,
+    targetVelocity: chosenTangent.scale(targetSpeed),
+  };
+}
+
+export function isGhostOrbitMatch(
+  manualVelocity: Vector2Like,
+  targetVelocity: Vector2Like,
+  options?: {
+    magnitudeTolerance?: number;
+    angleToleranceDegrees?: number;
+  },
+): boolean {
+  const magnitudeTolerance =
+    options?.magnitudeTolerance ?? GHOST_ORBIT_MATCH_MAGNITUDE_TOLERANCE;
+  const angleToleranceDegrees =
+    options?.angleToleranceDegrees ?? GHOST_ORBIT_MATCH_ANGLE_TOLERANCE_DEGREES;
+  const manual = Vector2D.from(manualVelocity);
+  const target = Vector2D.from(targetVelocity);
+  const manualSpeed = manual.magnitude();
+  const targetSpeed = target.magnitude();
+
+  if (manualSpeed <= 1e-9 || targetSpeed <= 1e-9) {
+    return false;
+  }
+
+  const magnitudeError = Math.abs(manualSpeed - targetSpeed) / targetSpeed;
+  if (magnitudeError > magnitudeTolerance) {
+    return false;
+  }
+
+  const cosine = manual.dot(target) / (manualSpeed * targetSpeed);
+  const angleDegrees =
+    (Math.acos(Math.min(1, Math.max(-1, cosine))) * 180) / Math.PI;
+  return angleDegrees <= angleToleranceDegrees;
 }
