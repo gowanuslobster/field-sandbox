@@ -14,20 +14,50 @@ import {
   FieldLinesCanvas,
   type FieldLineRenderMode,
 } from "@/components/FieldLinesCanvas";
+import {
+  ParticlesCanvas,
+  type ParticleEnergySnapshot,
+  type ParticlesController,
+} from "@/components/ParticlesCanvas";
 import { VectorFieldCanvas } from "@/components/VectorFieldCanvas";
-import { potentialAtPoint } from "@/physics/electrostatics";
+import { calculateFieldAt, potentialAtPoint } from "@/physics/electrostatics";
+import {
+  calculateGhostOrbitSuggestion,
+  DEFAULT_TEST_PARTICLE_CHARGE,
+  DEFAULT_TEST_PARTICLE_MASS,
+  type GhostOrbitSuggestion,
+  isGhostOrbitMatch,
+  PARTICLE_PLUMMER_EPSILON,
+} from "@/physics/dynamics";
 import type { Charge, WorldBounds } from "@/physics/types";
+import type { Vector2Like } from "@/physics/vector2d";
 import {
   getViewBounds,
   screenToWorld,
   worldToScreen,
 } from "@/physics/world-space";
 
-type Mode = "select" | "add_positive" | "add_negative";
+type Mode = "select" | "add_positive" | "add_negative" | "drop_test_charge";
+type SlingshotPreview = {
+  particleId: string | null;
+  origin: Vector2Like;
+  cursor: Vector2Like;
+  plannedVelocity: Vector2Like;
+  ghostSuggestion: GhostOrbitSuggestion | null;
+  ghostAnchor: Vector2Like;
+};
+type SlingshotSession = {
+  particleId: string | null;
+  origin: Vector2Like;
+  spawnOnRelease: boolean;
+  ghostSuggestion: GhostOrbitSuggestion | null;
+  ghostAnchor: Vector2Like;
+};
 
 const CHARGE_RADIUS_PX = 13;
 const MIN_ZOOM = 0.1;
 const MAX_ZOOM = 6.5;
+const SLINGSHOT_DRAG_TO_VELOCITY = 4.8;
 
 const INITIAL_CHARGES: Charge[] = [
   { id: "q1", position: { x: -0.72, y: 0 }, value: 1 },
@@ -64,6 +94,26 @@ function toChargeClass(value: number, selected: boolean): string {
 export function ElectricFieldSandbox() {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const dragStateRef = useRef<{ chargeId: string } | null>(null);
+  const slingshotRef = useRef<SlingshotSession | null>(null);
+  const slingshotPreviewRef = useRef<SlingshotPreview | null>(null);
+  const probeDragRef = useRef(false);
+  const particleSpawnerRef = useRef<
+    ((position: Vector2Like) => { id: string; pos: Vector2Like; vel: Vector2Like }) | null
+  >(null);
+  const particleClearRef = useRef<(() => void) | null>(null);
+  const particlePickRef = useRef<
+    ((worldPosition: Vector2Like, radiusWorld: number) => {
+      id: string;
+      pos: Vector2Like;
+      vel: Vector2Like;
+    } | null) | null
+  >(null);
+  const particleFreezeRef = useRef<((id: string, frozen: boolean) => void) | null>(
+    null,
+  );
+  const particleLaunchRef = useRef<
+    ((id: string, velocity: Vector2Like) => void) | null
+  >(null);
   const panStateRef = useRef<{
     startX: number;
     startY: number;
@@ -71,6 +121,7 @@ export function ElectricFieldSandbox() {
     startOffsetY: number;
   } | null>(null);
   const isSpacePressedRef = useRef(false);
+  const modeRef = useRef<Mode>("select");
   const cameraRef = useRef({ offsetX: 0, offsetY: 0 });
   const zoomRef = useRef(1);
   const chargesRef = useRef(INITIAL_CHARGES);
@@ -97,8 +148,28 @@ export function ElectricFieldSandbox() {
   const [fieldLineMode, setFieldLineMode] =
     useState<FieldLineRenderMode>("static_arrows");
   const [isDraggingCharge, setIsDraggingCharge] = useState(false);
-  const [isSimulating, setIsSimulating] = useState(
-    fieldLineMode === "animated_dashes",
+  const [testParticleCount, setTestParticleCount] = useState(0);
+  const [particleEnergySnapshot, setParticleEnergySnapshot] =
+    useState<ParticleEnergySnapshot | null>(null);
+  const [probePosition, setProbePosition] = useState<Vector2Like>({
+    x: -0.18,
+    y: 0.18,
+  });
+  const [slingshotPreview, setSlingshotPreview] =
+    useState<SlingshotPreview | null>(null);
+  const setInteractionMode = useCallback((nextMode: Mode) => {
+    modeRef.current = nextMode;
+    setMode(nextMode);
+  }, []);
+  const handleParticleControllerReady = useCallback(
+    (controller: ParticlesController | null) => {
+      particleSpawnerRef.current = controller?.spawn ?? null;
+      particleClearRef.current = controller?.clear ?? null;
+      particlePickRef.current = controller?.pickAt ?? null;
+      particleFreezeRef.current = controller?.setFrozen ?? null;
+      particleLaunchRef.current = controller?.launch ?? null;
+    },
+    [],
   );
 
   const panFromClientDelta = useCallback((clientX: number, clientY: number) => {
@@ -163,6 +234,22 @@ export function ElectricFieldSandbox() {
     () => 1 / Math.max(0.35, contourDensity),
     [contourDensity],
   );
+  const particleDespawnBounds = useMemo(
+    () => getViewBounds(baseBounds, { zoom: MIN_ZOOM, offsetX, offsetY }),
+    [baseBounds, offsetX, offsetY],
+  );
+  const isSimulating =
+    isDraggingCharge ||
+    fieldLineMode === "animated_dashes" ||
+    testParticleCount > 0;
+  const probePotential = useMemo(
+    () => potentialAtPoint(probePosition, charges),
+    [charges, probePosition],
+  );
+  const probeField = useMemo(
+    () => calculateFieldAt(probePosition.x, probePosition.y, charges),
+    [charges, probePosition],
+  );
 
   useEffect(() => {
     chargesRef.current = charges;
@@ -175,6 +262,10 @@ export function ElectricFieldSandbox() {
   useEffect(() => {
     zoomRef.current = zoom;
   }, [zoom]);
+
+  useEffect(() => {
+    modeRef.current = mode;
+  }, [mode]);
 
   useEffect(() => {
     boundsRef.current = viewBounds;
@@ -267,9 +358,8 @@ export function ElectricFieldSandbox() {
   const startDrag = (chargeId: string) => {
     dragStateRef.current = { chargeId };
     setIsDraggingCharge(true);
-    setIsSimulating(true);
     setSelectedChargeId(chargeId);
-    setMode("select");
+    setInteractionMode("select");
   };
 
   const removeSelectedCharge = useCallback(() => {
@@ -284,7 +374,7 @@ export function ElectricFieldSandbox() {
 
   useEffect(() => {
     const onPointerMove = (event: PointerEvent) => {
-      if (!panStateRef.current && !dragStateRef.current) {
+      if (!panStateRef.current && !dragStateRef.current && !slingshotRef.current) {
         const wantsRightPan = (event.buttons & 2) === 2;
         const wantsSpacePan =
           isSpacePressedRef.current && (event.buttons & 1) === 1;
@@ -307,6 +397,41 @@ export function ElectricFieldSandbox() {
         return;
       }
 
+      if (slingshotRef.current) {
+        const session = slingshotRef.current;
+        const origin = session.origin;
+        const dragVector = {
+          x: world.x - origin.x,
+          y: world.y - origin.y,
+        };
+        const plannedVelocity = {
+          x: dragVector.x * SLINGSHOT_DRAG_TO_VELOCITY,
+          y: dragVector.y * SLINGSHOT_DRAG_TO_VELOCITY,
+        };
+        setSlingshotPreview({
+          particleId: session.particleId,
+          origin,
+          cursor: world,
+          plannedVelocity,
+          ghostSuggestion: session.ghostSuggestion,
+          ghostAnchor: session.ghostAnchor,
+        });
+        slingshotPreviewRef.current = {
+          particleId: session.particleId,
+          origin,
+          cursor: world,
+          plannedVelocity,
+          ghostSuggestion: session.ghostSuggestion,
+          ghostAnchor: session.ghostAnchor,
+        };
+        return;
+      }
+
+      if (probeDragRef.current) {
+        setProbePosition(world);
+        return;
+      }
+
       setCursorPotential(potentialAtPoint(world, chargesRef.current));
       const dragging = dragStateRef.current;
       if (!dragging) {
@@ -322,10 +447,32 @@ export function ElectricFieldSandbox() {
     };
 
     const onPointerUp = () => {
+      if (slingshotRef.current) {
+        const session = slingshotRef.current;
+        const plannedVelocity = slingshotPreviewRef.current?.plannedVelocity ?? {
+          x: 0,
+          y: 0,
+        };
+        if (session.spawnOnRelease) {
+          const spawned = particleSpawnerRef.current?.(session.origin);
+          if (spawned) {
+            particleLaunchRef.current?.(spawned.id, plannedVelocity);
+          }
+        } else if (session.particleId) {
+          if (slingshotPreviewRef.current) {
+            particleLaunchRef.current?.(session.particleId, plannedVelocity);
+          } else {
+            particleFreezeRef.current?.(session.particleId, false);
+          }
+        }
+        slingshotRef.current = null;
+        setSlingshotPreview(null);
+        slingshotPreviewRef.current = null;
+      }
       dragStateRef.current = null;
       panStateRef.current = null;
+      probeDragRef.current = false;
       setIsDraggingCharge(false);
-      setIsSimulating(fieldLineMode === "animated_dashes");
     };
 
     window.addEventListener("pointermove", onPointerMove);
@@ -334,7 +481,7 @@ export function ElectricFieldSandbox() {
       window.removeEventListener("pointermove", onPointerMove);
       window.removeEventListener("pointerup", onPointerUp);
     };
-  }, [fieldLineMode, getWorldFromClientPoint, panFromClientDelta]);
+  }, [getWorldFromClientPoint, panFromClientDelta]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -365,10 +512,118 @@ export function ElectricFieldSandbox() {
     };
   }, [removeSelectedCharge]);
 
+  const initializeDropSlingshot = useCallback(
+    (clientX: number, clientY: number) => {
+      const world = getWorldFromClientPoint(clientX, clientY);
+      if (!world) {
+        return;
+      }
+      const initialGhostSuggestion =
+        modeRef.current === "drop_test_charge"
+          ? calculateGhostOrbitSuggestion(
+              world,
+              { x: 0, y: 0 },
+              chargesRef.current,
+              DEFAULT_TEST_PARTICLE_CHARGE,
+              DEFAULT_TEST_PARTICLE_MASS,
+              { softening: PARTICLE_PLUMMER_EPSILON, interactionMode: "electric" },
+            )
+          : null;
+
+      const worldPerPixel =
+        (viewBounds.maxX - viewBounds.minX) / Math.max(size.width, 1);
+      const hit = particlePickRef.current?.(world, worldPerPixel * 60);
+      if (hit) {
+        slingshotRef.current = {
+          particleId: hit.id,
+          origin: hit.pos,
+          spawnOnRelease: false,
+          ghostSuggestion: initialGhostSuggestion,
+          ghostAnchor: world,
+        };
+        particleFreezeRef.current?.(hit.id, true);
+        const preview: SlingshotPreview = {
+          particleId: hit.id,
+          origin: hit.pos,
+          cursor: world,
+          plannedVelocity: { x: 0, y: 0 },
+          ghostSuggestion: initialGhostSuggestion,
+          ghostAnchor: world,
+        };
+        slingshotPreviewRef.current = preview;
+        setSlingshotPreview(preview);
+        return;
+      }
+
+      slingshotRef.current = {
+        particleId: null,
+        origin: world,
+        spawnOnRelease: true,
+        ghostSuggestion: initialGhostSuggestion,
+        ghostAnchor: world,
+      };
+      const preview: SlingshotPreview = {
+        particleId: null,
+        origin: world,
+        cursor: world,
+        plannedVelocity: { x: 0, y: 0 },
+        ghostSuggestion: initialGhostSuggestion,
+        ghostAnchor: world,
+      };
+      slingshotPreviewRef.current = preview;
+      setSlingshotPreview(preview);
+    },
+    [getWorldFromClientPoint, size.width, viewBounds.maxX, viewBounds.minX],
+  );
+
   const handleCanvasPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const interactionMode = modeRef.current;
+    if (
+      event.button === 0 &&
+      interactionMode === "select"
+    ) {
+      const world = getWorldFromClientPoint(event.clientX, event.clientY);
+      if (world) {
+        const worldPerPixel =
+          (viewBounds.maxX - viewBounds.minX) / Math.max(size.width, 1);
+        const hit = particlePickRef.current?.(world, worldPerPixel * 60);
+        if (hit) {
+          event.preventDefault();
+          event.stopPropagation();
+          slingshotRef.current = {
+            particleId: hit.id,
+            origin: hit.pos,
+            spawnOnRelease: false,
+            ghostSuggestion: null,
+            ghostAnchor: world,
+          };
+          particleFreezeRef.current?.(hit.id, true);
+          const preview: SlingshotPreview = {
+            particleId: hit.id,
+            origin: hit.pos,
+            cursor: world,
+            plannedVelocity: { x: 0, y: 0 },
+            ghostSuggestion: null,
+            ghostAnchor: world,
+          };
+          slingshotPreviewRef.current = preview;
+          setSlingshotPreview(preview);
+          return;
+        }
+      }
+    }
+
+    if (interactionMode === "drop_test_charge" && event.button === 0) {
+      if (!slingshotRef.current) {
+        initializeDropSlingshot(event.clientX, event.clientY);
+      }
+      return;
+    }
+
     const shouldPan =
       event.button === 2 ||
-      (event.button === 0 && (isSpacePressedRef.current || mode === "select"));
+      (event.button === 0 &&
+        (isSpacePressedRef.current || interactionMode === "select"));
     if (shouldPan) {
       event.preventDefault();
       setSelectedChargeId(null);
@@ -390,7 +645,7 @@ export function ElectricFieldSandbox() {
       return;
     }
 
-    const value = mode === "add_positive" ? 1 : -1;
+    const value = interactionMode === "add_positive" ? 1 : -1;
     const id = nextChargeId();
     setCharges((current) => {
       const newCharge: Charge = {
@@ -413,6 +668,123 @@ export function ElectricFieldSandbox() {
     );
   };
 
+  const probeScreen = worldToScreen(
+    probePosition,
+    viewBounds,
+    size.width,
+    size.height,
+  );
+  const probeFieldMagnitude = probeField.magnitude();
+  const probeDirection =
+    probeFieldMagnitude > 1e-6
+      ? probeField.scale(1 / probeFieldMagnitude)
+      : probeField;
+  const probeArrowWorldLength =
+    (viewBounds.maxX - viewBounds.minX) *
+    (0.017 + 0.03 * Math.min(1, Math.log1p(probeFieldMagnitude) / Math.log1p(10)));
+  const probeArrowWorldEnd = {
+    x: probePosition.x + probeDirection.x * probeArrowWorldLength,
+    y: probePosition.y + probeDirection.y * probeArrowWorldLength,
+  };
+  const probeArrowScreenEnd = worldToScreen(
+    probeArrowWorldEnd,
+    viewBounds,
+    size.width,
+    size.height,
+  );
+  const probeArrowDx = probeArrowScreenEnd.x - probeScreen.x;
+  const probeArrowDy = probeArrowScreenEnd.y - probeScreen.y;
+  const probeArrowLength = Math.hypot(probeArrowDx, probeArrowDy);
+  const probeArrowUx = probeArrowLength > 1e-6 ? probeArrowDx / probeArrowLength : 0;
+  const probeArrowUy = probeArrowLength > 1e-6 ? probeArrowDy / probeArrowLength : 0;
+  const probeHeadSize = 7;
+  const slingshotOriginScreen = slingshotPreview
+    ? worldToScreen(slingshotPreview.origin, viewBounds, size.width, size.height)
+    : null;
+  const slingshotCursorScreen = slingshotPreview
+    ? worldToScreen(slingshotPreview.cursor, viewBounds, size.width, size.height)
+    : null;
+  const slingshotDx =
+    slingshotOriginScreen && slingshotCursorScreen
+      ? slingshotCursorScreen.x - slingshotOriginScreen.x
+      : 0;
+  const slingshotDy =
+    slingshotOriginScreen && slingshotCursorScreen
+      ? slingshotCursorScreen.y - slingshotOriginScreen.y
+      : 0;
+  const slingshotLength = Math.hypot(slingshotDx, slingshotDy);
+  const slingshotUx = slingshotLength > 1e-6 ? slingshotDx / slingshotLength : 0;
+  const slingshotUy = slingshotLength > 1e-6 ? slingshotDy / slingshotLength : 0;
+  const plannedVelocityMagnitude = slingshotPreview
+    ? Math.hypot(
+        slingshotPreview.plannedVelocity.x,
+        slingshotPreview.plannedVelocity.y,
+      )
+    : 0;
+  const ghostOrbitSuggestion =
+    mode === "drop_test_charge" ? slingshotPreview?.ghostSuggestion ?? null : null;
+  const ghostOrbitMatch =
+    slingshotPreview && ghostOrbitSuggestion
+      ? isGhostOrbitMatch(
+          slingshotPreview.plannedVelocity,
+          ghostOrbitSuggestion.targetVelocity,
+        )
+      : false;
+  const ghostArrowWorldEnd =
+    slingshotPreview && ghostOrbitSuggestion
+        ? {
+          x:
+            slingshotPreview.ghostAnchor.x +
+            ghostOrbitSuggestion.targetVelocity.x / SLINGSHOT_DRAG_TO_VELOCITY,
+          y:
+            slingshotPreview.ghostAnchor.y +
+            ghostOrbitSuggestion.targetVelocity.y / SLINGSHOT_DRAG_TO_VELOCITY,
+        }
+      : null;
+  const ghostArrowStartScreen =
+    slingshotPreview && ghostOrbitSuggestion
+      ? worldToScreen(
+          slingshotPreview.ghostAnchor,
+          viewBounds,
+          size.width,
+          size.height,
+        )
+      : null;
+  const ghostArrowEndScreen =
+    ghostArrowWorldEnd && ghostOrbitSuggestion
+      ? worldToScreen(ghostArrowWorldEnd, viewBounds, size.width, size.height)
+      : null;
+  const ghostArrowDx =
+    ghostArrowStartScreen && ghostArrowEndScreen
+      ? ghostArrowEndScreen.x - ghostArrowStartScreen.x
+      : 0;
+  const ghostArrowDy =
+    ghostArrowStartScreen && ghostArrowEndScreen
+      ? ghostArrowEndScreen.y - ghostArrowStartScreen.y
+      : 0;
+  const ghostArrowLength = Math.hypot(ghostArrowDx, ghostArrowDy);
+  const ghostArrowUx = ghostArrowLength > 1e-6 ? ghostArrowDx / ghostArrowLength : 0;
+  const ghostArrowUy = ghostArrowLength > 1e-6 ? ghostArrowDy / ghostArrowLength : 0;
+  const ghostArrowColor = ghostOrbitMatch
+    ? "rgba(255, 214, 92, 0.98)"
+    : "rgba(159, 247, 255, 0.62)";
+  const ghostArrowGlowColor = ghostOrbitMatch
+    ? "rgba(255, 214, 92, 0.42)"
+    : "rgba(159, 247, 255, 0.18)";
+
+  const handleCanvasPointerDownCapture = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      if (event.button !== 0 || modeRef.current !== "drop_test_charge") {
+        return;
+      }
+      if (slingshotRef.current) {
+        return;
+      }
+      initializeDropSlingshot(event.clientX, event.clientY);
+    },
+    [initializeDropSlingshot],
+  );
+
   return (
     <section className="h-dvh w-full bg-[#0F0F0F] text-zinc-100">
       <div className="absolute left-4 top-4 z-20 w-[330px] rounded-2xl border border-cyan-300/20 bg-black/65 p-4 shadow-[0_0_36px_rgba(56,189,248,0.2)] backdrop-blur-md">
@@ -427,7 +799,7 @@ export function ElectricFieldSandbox() {
         <div className="mt-2 grid grid-cols-2 gap-2">
           <button
             type="button"
-            onClick={() => setMode("select")}
+            onClick={() => setInteractionMode("select")}
             className={`rounded-md px-3 py-2 text-sm transition-all duration-200 ${
               mode === "select"
                 ? "bg-white text-black shadow-[0_0_20px_rgba(255,255,255,0.35)]"
@@ -438,7 +810,7 @@ export function ElectricFieldSandbox() {
           </button>
           <button
             type="button"
-            onClick={() => setMode("add_positive")}
+            onClick={() => setInteractionMode("add_positive")}
             className={`rounded-md px-3 py-2 text-sm transition-all duration-200 ${
               mode === "add_positive"
                 ? "bg-orange-300 text-black shadow-[0_0_20px_rgba(255,160,90,0.45)]"
@@ -449,7 +821,7 @@ export function ElectricFieldSandbox() {
           </button>
           <button
             type="button"
-            onClick={() => setMode("add_negative")}
+            onClick={() => setInteractionMode("add_negative")}
             className={`rounded-md px-3 py-2 text-sm transition-all duration-200 ${
               mode === "add_negative"
                 ? "bg-cyan-200 text-black shadow-[0_0_20px_rgba(94,220,255,0.45)]"
@@ -464,6 +836,30 @@ export function ElectricFieldSandbox() {
             className="rounded-md bg-rose-400/20 px-3 py-2 text-sm text-rose-100 transition-colors duration-200 hover:bg-rose-400/35"
           >
             Remove Selected
+          </button>
+          <button
+            type="button"
+            onClick={() => setInteractionMode("drop_test_charge")}
+            className={`col-span-2 rounded-md px-3 py-2 text-sm transition-all duration-200 ${
+              mode === "drop_test_charge"
+                ? "bg-amber-200 text-black shadow-[0_0_20px_rgba(255,226,153,0.42)]"
+                : "bg-amber-300/20 text-amber-100 hover:bg-amber-300/35"
+            }`}
+          >
+            + Drop Test Charge
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              slingshotRef.current = null;
+              slingshotPreviewRef.current = null;
+              setSlingshotPreview(null);
+              particleClearRef.current?.();
+              setInteractionMode("select");
+            }}
+            className="col-span-2 rounded-md bg-cyan-300/20 px-3 py-2 text-sm text-cyan-100 transition-colors duration-200 hover:bg-cyan-300/35"
+          >
+            Clear Test Charges
           </button>
         </div>
         {selectedCharge ? (
@@ -529,13 +925,7 @@ export function ElectricFieldSandbox() {
         <div className="mt-2 space-y-2">
           <button
             type="button"
-            onClick={() =>
-              setFieldLineMode((current) => {
-                const nextMode = nextFieldLineMode(current);
-                setIsSimulating(isDraggingCharge || nextMode === "animated_dashes");
-                return nextMode;
-              })
-            }
+            onClick={() => setFieldLineMode((current) => nextFieldLineMode(current))}
             className={`flex w-full items-center justify-between rounded-md px-3 py-2 text-sm transition-all duration-200 ${
               fieldLineMode === "animated_dashes"
                 ? "bg-violet-300/85 text-black shadow-[0_0_14px_rgba(196,181,253,0.45)]"
@@ -625,17 +1015,79 @@ export function ElectricFieldSandbox() {
           </button>
         </div>
 
+        <div className="mt-4 rounded-lg border border-cyan-200/20 bg-cyan-950/20 px-3 py-2 text-xs">
+          <p className="font-medium uppercase tracking-[0.15em] text-cyan-100/85">
+            Slope Probe
+          </p>
+          <div className="mt-2 space-y-1 text-cyan-100">
+            <p>
+              V: <span className="font-semibold">{probePotential.toFixed(3)}</span>
+            </p>
+            <p>
+              E:{" "}
+              <span className="font-semibold">
+                ({probeField.x.toFixed(3)}, {probeField.y.toFixed(3)}) | |E|{" "}
+                {probeField.magnitude().toFixed(3)}
+              </span>
+            </p>
+            <p>
+              (x, y):{" "}
+              <span className="font-semibold">
+                ({probePosition.x.toFixed(3)}, {probePosition.y.toFixed(3)})
+              </span>
+            </p>
+          </div>
+        </div>
+        <div className="mt-3 rounded-lg border border-amber-200/20 bg-amber-950/20 px-3 py-2 text-xs">
+          <p className="font-medium uppercase tracking-[0.15em] text-amber-100/85">
+            Energy HUD
+          </p>
+          {particleEnergySnapshot ? (
+            <div className="mt-2 space-y-1 text-amber-100">
+              <p>
+                Tracked:{" "}
+                <span className="font-semibold">{particleEnergySnapshot.particleId}</span>
+              </p>
+              <p>
+                E = KE + PE:{" "}
+                <span className="font-semibold">
+                  {particleEnergySnapshot.totalEnergy.toFixed(6)}
+                </span>
+              </p>
+              <p>
+                KE / PE:{" "}
+                <span className="font-semibold">
+                  {particleEnergySnapshot.kineticEnergy.toFixed(6)} /{" "}
+                  {particleEnergySnapshot.potentialEnergy.toFixed(6)}
+                </span>
+              </p>
+              <p>
+                Drift from baseline:{" "}
+                <span className="font-semibold">
+                  {particleEnergySnapshot.driftPercent >= 0 ? "+" : ""}
+                  {particleEnergySnapshot.driftPercent.toFixed(3)}%
+                </span>
+              </p>
+            </div>
+          ) : (
+            <p className="mt-2 text-amber-100/80">Drop a test particle to monitor KE + PE.</p>
+          )}
+        </div>
+
         <div className="mt-4 rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-xs">
           <p className="font-medium tracking-wide text-zinc-100">Charges: {charges.length}</p>
           <p className="text-zinc-300">Cursor potential V ≈ {cursorPotential.toFixed(3)}</p>
+          <p className="text-zinc-300">Test Particles: {testParticleCount}</p>
           <p className="mt-1 text-zinc-400">
-            Tip: Wheel to zoom; pan with Select-drag, right-drag, or Space-drag.
+            Tip: Wheel to zoom; pan with Select-drag/right-drag/Space-drag; drag a
+            test particle to slingshot.
           </p>
         </div>
       </div>
 
       <div
         ref={containerRef}
+        onPointerDownCapture={handleCanvasPointerDownCapture}
         onPointerDown={handleCanvasPointerDown}
         onPointerUp={() => {
           panStateRef.current = null;
@@ -680,6 +1132,226 @@ export function ElectricFieldSandbox() {
             className="pointer-events-none absolute inset-0 h-full w-full"
           />
         ) : null}
+        <ParticlesCanvas
+          charges={charges}
+          bounds={viewBounds}
+          despawnBounds={particleDespawnBounds}
+          isSimulating={isSimulating}
+          onControllerReady={handleParticleControllerReady}
+          onParticleCountChange={setTestParticleCount}
+          onEnergySnapshotChange={setParticleEnergySnapshot}
+          className="pointer-events-none absolute inset-0 h-full w-full"
+        />
+        <svg className="pointer-events-none absolute inset-0 h-full w-full">
+          {ghostArrowStartScreen && ghostArrowEndScreen ? (
+            <>
+              <line
+                x1={ghostArrowStartScreen.x}
+                y1={ghostArrowStartScreen.y}
+                x2={ghostArrowEndScreen.x}
+                y2={ghostArrowEndScreen.y}
+                stroke={ghostArrowGlowColor}
+                strokeWidth={ghostOrbitMatch ? "8" : "5"}
+                strokeLinecap="round"
+              />
+              <line
+                x1={ghostArrowStartScreen.x}
+                y1={ghostArrowStartScreen.y}
+                x2={ghostArrowEndScreen.x}
+                y2={ghostArrowEndScreen.y}
+                stroke={ghostArrowColor}
+                strokeWidth={ghostOrbitMatch ? "3.6" : "2.4"}
+                strokeLinecap="round"
+                strokeDasharray="8 7"
+              />
+              <line
+                x1={ghostArrowEndScreen.x}
+                y1={ghostArrowEndScreen.y}
+                x2={
+                  ghostArrowEndScreen.x -
+                  ghostArrowUx * 10 -
+                  ghostArrowUy * 5.5
+                }
+                y2={
+                  ghostArrowEndScreen.y -
+                  ghostArrowUy * 10 +
+                  ghostArrowUx * 5.5
+                }
+                stroke={ghostArrowColor}
+                strokeWidth={ghostOrbitMatch ? "3.2" : "2.4"}
+                strokeLinecap="round"
+              />
+              <line
+                x1={ghostArrowEndScreen.x}
+                y1={ghostArrowEndScreen.y}
+                x2={
+                  ghostArrowEndScreen.x -
+                  ghostArrowUx * 10 +
+                  ghostArrowUy * 5.5
+                }
+                y2={
+                  ghostArrowEndScreen.y -
+                  ghostArrowUy * 10 -
+                  ghostArrowUx * 5.5
+                }
+                stroke={ghostArrowColor}
+                strokeWidth={ghostOrbitMatch ? "3.2" : "2.4"}
+                strokeLinecap="round"
+              />
+              {ghostOrbitMatch ? (
+                <>
+                  <rect
+                    x={ghostArrowEndScreen.x + 12}
+                    y={ghostArrowEndScreen.y - 26}
+                    width={118}
+                    height={20}
+                    rx={5}
+                    fill="rgba(26, 17, 0, 0.78)"
+                    stroke="rgba(255, 214, 92, 0.72)"
+                    strokeWidth="1"
+                  />
+                  <text
+                    x={ghostArrowEndScreen.x + 20}
+                    y={ghostArrowEndScreen.y - 12}
+                    fill="rgba(255, 238, 179, 0.98)"
+                    fontSize="12"
+                    fontWeight="700"
+                  >
+                    Stable Orbit Path
+                  </text>
+                </>
+              ) : null}
+            </>
+          ) : null}
+          {slingshotOriginScreen && slingshotCursorScreen ? (
+            <>
+              <line
+                x1={slingshotOriginScreen.x}
+                y1={slingshotOriginScreen.y}
+                x2={slingshotCursorScreen.x}
+                y2={slingshotCursorScreen.y}
+                stroke="rgba(255, 247, 122, 0.98)"
+                strokeWidth="3.5"
+                strokeLinecap="round"
+              />
+              <line
+                x1={slingshotCursorScreen.x}
+                y1={slingshotCursorScreen.y}
+                x2={
+                  slingshotCursorScreen.x -
+                  slingshotUx * 9 -
+                  slingshotUy * 5
+                }
+                y2={
+                  slingshotCursorScreen.y -
+                  slingshotUy * 9 +
+                  slingshotUx * 5
+                }
+                stroke="rgba(255, 247, 122, 0.98)"
+                strokeWidth="3"
+                strokeLinecap="round"
+              />
+              <line
+                x1={slingshotCursorScreen.x}
+                y1={slingshotCursorScreen.y}
+                x2={
+                  slingshotCursorScreen.x -
+                  slingshotUx * 9 +
+                  slingshotUy * 5
+                }
+                y2={
+                  slingshotCursorScreen.y -
+                  slingshotUy * 9 -
+                  slingshotUx * 5
+                }
+                stroke="rgba(255, 247, 122, 0.98)"
+                strokeWidth="3"
+                strokeLinecap="round"
+              />
+              <rect
+                x={(slingshotOriginScreen.x + slingshotCursorScreen.x) * 0.5 + 4}
+                y={(slingshotOriginScreen.y + slingshotCursorScreen.y) * 0.5 - 22}
+                width={90}
+                height={18}
+                rx={4}
+                fill="rgba(2, 10, 16, 0.75)"
+                stroke="rgba(255, 247, 122, 0.55)"
+                strokeWidth="1"
+              />
+              <text
+                x={(slingshotOriginScreen.x + slingshotCursorScreen.x) * 0.5 + 10}
+                y={(slingshotOriginScreen.y + slingshotCursorScreen.y) * 0.5 - 8}
+                fill="rgba(255, 252, 198, 0.98)"
+                fontSize="12"
+                fontWeight="700"
+              >
+                v: {plannedVelocityMagnitude.toFixed(2)}
+              </text>
+            </>
+          ) : null}
+          <line
+            x1={probeScreen.x}
+            y1={probeScreen.y}
+            x2={probeArrowScreenEnd.x}
+            y2={probeArrowScreenEnd.y}
+            stroke="rgba(184, 255, 247, 0.9)"
+            strokeWidth="2.1"
+            strokeLinecap="round"
+          />
+          <line
+            x1={probeArrowScreenEnd.x}
+            y1={probeArrowScreenEnd.y}
+            x2={
+              probeArrowScreenEnd.x -
+              probeArrowUx * probeHeadSize -
+              probeArrowUy * probeHeadSize * 0.6
+            }
+            y2={
+              probeArrowScreenEnd.y -
+              probeArrowUy * probeHeadSize +
+              probeArrowUx * probeHeadSize * 0.6
+            }
+            stroke="rgba(184, 255, 247, 0.9)"
+            strokeWidth="2"
+            strokeLinecap="round"
+          />
+          <line
+            x1={probeArrowScreenEnd.x}
+            y1={probeArrowScreenEnd.y}
+            x2={
+              probeArrowScreenEnd.x -
+              probeArrowUx * probeHeadSize +
+              probeArrowUy * probeHeadSize * 0.6
+            }
+            y2={
+              probeArrowScreenEnd.y -
+              probeArrowUy * probeHeadSize -
+              probeArrowUx * probeHeadSize * 0.6
+            }
+            stroke="rgba(184, 255, 247, 0.9)"
+            strokeWidth="2"
+            strokeLinecap="round"
+          />
+        </svg>
+        <button
+          type="button"
+          onPointerDown={(event) => {
+            if (event.button !== 0) {
+              return;
+            }
+            if (modeRef.current === "drop_test_charge") {
+              return;
+            }
+            event.stopPropagation();
+            probeDragRef.current = true;
+          }}
+          className="absolute z-10 -translate-x-1/2 -translate-y-1/2 rounded-full border border-cyan-100/75 bg-cyan-200/25 p-1 text-[11px] text-cyan-50 shadow-[0_0_12px_rgba(103,232,249,0.65)]"
+          style={{ left: probeScreen.x, top: probeScreen.y }}
+          aria-label="Slope Probe"
+          title="Drag Slope Probe"
+        >
+          ⌖
+        </button>
 
         {charges.map((charge) => {
           const screen = worldToScreen(
@@ -695,6 +1367,9 @@ export function ElectricFieldSandbox() {
               type="button"
               onPointerDown={(event) => {
                 if (event.button === 2 || isSpacePressedRef.current) {
+                  return;
+                }
+                if (modeRef.current === "drop_test_charge") {
                   return;
                 }
                 event.stopPropagation();

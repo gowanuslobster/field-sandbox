@@ -42,3 +42,12 @@ export function electricFieldAtPoint(
 
   return new Vector2D(fieldX, fieldY);
 }
+
+export function calculateFieldAt(
+  x: number,
+  y: number,
+  charges: Charge[],
+  options?: { k?: number; softening?: number },
+): Vector2D {
+  return electricFieldAtPoint({ x, y }, charges, options);
+}
