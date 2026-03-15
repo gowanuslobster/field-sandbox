@@ -73,7 +73,13 @@ function toChargeClass(value: number, selected: boolean): string {
   return `${base} ${selectedClass} border-cyan-200/85 bg-cyan-400/95 shadow-[0_0_24px_6px_rgba(61,196,255,0.6)]`;
 }
 
+/**
+ * Composes the main sandbox scene, coordinates the interaction hooks, and
+ * passes the current view and source configuration down to the render layers.
+ */
 export function ElectricFieldSandbox() {
+  // Long-lived refs connect the sandbox to child-layer control callbacks and
+  // to global pointer/keyboard handlers without forcing rerenders.
   const containerRef = useRef<HTMLDivElement | null>(null);
   const particleSpawnerRef = useRef<
     ((position: Vector2Like) => { id: string; pos: Vector2Like; vel: Vector2Like }) | null
@@ -100,6 +106,9 @@ export function ElectricFieldSandbox() {
   const [particleEnergySnapshot, setParticleEnergySnapshot] =
     useState<ParticleEnergySnapshot | null>(null);
   const [isParticleMotionPaused, setIsParticleMotionPaused] = useState(false);
+
+  // Top-level UI mode changes also update a ref so pointer handlers can read
+  // the latest interaction mode outside React's event cycle.
   const setInteractionMode = useCallback((nextMode: Mode) => {
     modeRef.current = nextMode;
     setMode(nextMode);
@@ -151,6 +160,7 @@ export function ElectricFieldSandbox() {
     [baseBounds, offsetX, offsetY],
   );
 
+  // Keep the interaction hooks synchronized with the latest scene data.
   useEffect(() => {
     chargesRef.current = charges;
   }, [charges]);
@@ -203,6 +213,7 @@ export function ElectricFieldSandbox() {
     isDraggingCharge ||
     fieldLineMode === "animated_dashes" ||
     testParticleCount > 0;
+
   const removeSelectedCharge = useCallback(() => {
     if (!selectedChargeId) {
       return;
@@ -214,6 +225,8 @@ export function ElectricFieldSandbox() {
   }, [selectedChargeId]);
 
   useEffect(() => {
+    // Global pointer ownership is routed through the interaction hooks in a
+    // fixed order so only one subsystem consumes each move event.
     const onPointerMove = (event: PointerEvent) => {
       maybeStartImplicitPan(
         event,
@@ -299,6 +312,9 @@ export function ElectricFieldSandbox() {
 
   const handleCanvasPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
     const interactionMode = modeRef.current;
+
+    // Drop mode uses pointer down to establish the slingshot anchor before any
+    // drag vector exists.
     if (interactionMode === "drop_test_charge" && event.button === 0) {
       if (!hasActiveSlingshot) {
         initializeDropSlingshot(event.clientX, event.clientY);
@@ -344,6 +360,7 @@ export function ElectricFieldSandbox() {
     handleWheelZoom(event.clientX, event.clientY, event.deltaY);
   };
 
+  // These screen-space values drive the launch-vector and Ghost Orbit overlay.
   const slingshotOriginScreen = slingshotPreview
     ? worldToScreen(slingshotPreview.origin, viewBounds, size.width, size.height)
     : null;
@@ -423,6 +440,8 @@ export function ElectricFieldSandbox() {
       if (event.button !== 0 || modeRef.current !== "drop_test_charge") {
         return;
       }
+      // Capture starts the launch interaction before the bubbling handler has a
+      // chance to treat the click like a pan or charge-placement event.
       if (hasActiveSlingshot) {
         return;
       }
@@ -433,6 +452,7 @@ export function ElectricFieldSandbox() {
 
   return (
     <section className="h-dvh w-full bg-[#0F0F0F] text-zinc-100">
+      {/* The control panel is a pure UI surface; all scene behavior stays here. */}
       <FieldSandboxControlPanel
         mode={mode}
         selectedCharge={selectedCharge}
@@ -504,6 +524,8 @@ export function ElectricFieldSandbox() {
           backgroundSize: "100% 100%, 48px 48px, 48px 48px",
         }}
       >
+        {/* Each visualization layer renders independently from the same source
+            charges and camera bounds so students can mix overlays freely. */}
         <FieldHeatmap
           charges={charges}
           baseBounds={baseBounds}
@@ -543,6 +565,8 @@ export function ElectricFieldSandbox() {
           onEnergySnapshotChange={setParticleEnergySnapshot}
           className="pointer-events-none absolute inset-0 h-full w-full"
         />
+        {/* The SVG layer holds transient teaching overlays such as the launch
+            vector and Ghost Orbit guide. */}
         <svg className="pointer-events-none absolute inset-0 h-full w-full">
           {ghostArrowStartScreen && ghostArrowEndScreen ? (
             <>
@@ -692,6 +716,8 @@ export function ElectricFieldSandbox() {
           ) : null}
         </svg>
 
+        {/* Source charges stay as regular buttons because they are the only
+            scene objects students can directly drag and edit after placement. */}
         {charges.map((charge) => {
           const screen = worldToScreen(
             charge.position,

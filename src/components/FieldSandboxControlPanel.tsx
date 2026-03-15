@@ -83,6 +83,8 @@ export function FieldSandboxControlPanel({
       </p>
       <h1 className="mt-1 text-lg font-semibold text-white">Control Overlay</h1>
 
+      {/* Charge editing and test-particle creation are grouped together because
+          they are the primary scene-manipulation actions. */}
       <p className="mt-3 text-[11px] font-medium uppercase tracking-[0.15em] text-zinc-400">
         Charge Interaction
       </p>
@@ -147,6 +149,8 @@ export function FieldSandboxControlPanel({
         </button>
       </div>
 
+      {/* The selected-charge slider only appears when there is one concrete
+          source charge to edit. */}
       {selectedCharge ? (
         <div className="mt-3 rounded-lg border border-cyan-200/20 bg-cyan-950/25 px-3 py-2">
           <div className="flex items-center justify-between text-xs text-cyan-100">
@@ -198,6 +202,8 @@ export function FieldSandboxControlPanel({
         View Zoom: {(zoom * 100).toFixed(0)}%
       </p>
 
+      {/* Visualization toggles let students combine multiple ways of seeing the
+          same field without changing the underlying physics. */}
       <p className="mt-4 text-[11px] font-medium uppercase tracking-[0.15em] text-zinc-400">
         Visualization Layers
       </p>
@@ -298,6 +304,8 @@ export function FieldSandboxControlPanel({
         <p className="font-medium uppercase tracking-[0.15em] text-cyan-100/85">
           Field Strength Readout
         </p>
+        {/* Hover inspection replaces the old draggable probe, so the readout
+            appears only while the cursor is over the sandbox. */}
         {cursorReadout ? (
           <div className="mt-2 space-y-1 text-cyan-100">
             <p>
@@ -329,6 +337,8 @@ export function FieldSandboxControlPanel({
           <p className="font-medium uppercase tracking-[0.15em] text-amber-100/85">
             Energy Readout
           </p>
+          {/* Pause only affects test-particle motion; the rest of the scene
+              remains interactive so students can inspect the frozen state. */}
           <button
             type="button"
             onClick={onParticleMotionPausedToggle}

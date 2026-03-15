@@ -79,6 +79,10 @@ function appendHistory(history: Vector2D[], point: Vector2D): Vector2D[] {
   return [...history, point];
 }
 
+/**
+ * Simulates and renders launched test particles on a canvas layer while
+ * exposing a small command-style control API back to the sandbox.
+ */
 export function ParticlesCanvas({
   charges,
   bounds,
@@ -105,6 +109,7 @@ export function ParticlesCanvas({
   const needsRenderRef = useRef(true);
   const requestRenderRef = useRef<(() => void) | null>(null);
 
+  // The parent HUD only needs updates when the count actually changes.
   const emitParticleCount = useCallback(() => {
     const nextCount = particlesRef.current.length;
     if (nextCount === particleCountRef.current) {
@@ -114,6 +119,8 @@ export function ParticlesCanvas({
     onParticleCountChange?.(nextCount);
   }, [onParticleCountChange]);
 
+  // Energy tracking follows one active particle at a time so the readout stays
+  // stable instead of jumping between every particle in flight.
   const emitEnergySnapshot = useCallback(() => {
     if (!onEnergySnapshotChange) {
       return;
@@ -218,6 +225,8 @@ export function ParticlesCanvas({
           vel: velocityVector,
         },
         history:
+          // Large launch changes start a fresh trail so the visual path matches
+          // the new motion students just created.
           velocityDelta > VELOCITY_RESET_TRAIL_THRESHOLD
             ? [state.particle.pos]
             : state.history,
@@ -229,6 +238,8 @@ export function ParticlesCanvas({
   }, [emitEnergySnapshot]);
 
   useEffect(() => {
+    // This control API lets the sandbox create, clear, and launch particles
+    // without pushing the full simulation state up into React.
     onControllerReady?.({
       spawn: spawnParticle,
       clear: clearParticles,
@@ -310,6 +321,7 @@ export function ParticlesCanvas({
 
       const nextParticles: ParticleSimulationState[] = [];
       const targetDt = Math.max(0.0001, dt);
+      // Large frame gaps are subdivided so fast particle motion stays stable.
       const substeps = Math.max(
         1,
         Math.min(MAX_SUBSTEPS_PER_FRAME, Math.ceil(targetDt / PHYSICS_BASE_DT)),
@@ -322,6 +334,8 @@ export function ParticlesCanvas({
           nowMs >= state.unfreezeAtMs
             ? { ...state, frozen: false, unfreezeAtMs: null }
             : state;
+        // Newly spawned particles stay frozen briefly so students can finish
+        // the launch gesture before motion begins.
         if (thawedState.frozen) {
           nextParticles.push(thawedState);
           continue;
@@ -385,6 +399,8 @@ export function ParticlesCanvas({
       context.globalCompositeOperation = "lighter";
 
       for (const state of particlesRef.current) {
+        // Trails are smoothed visually even though the particle integration is
+        // sampled in discrete substeps.
         if (state.history.length > 1) {
           context.beginPath();
           const firstPoint = transformWorldPoint(state.history[0], transform);
