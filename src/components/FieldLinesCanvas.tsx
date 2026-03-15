@@ -46,6 +46,13 @@ const TRAIL_SEGMENTS = 4;
 const MAX_TRAIL_PIXEL_JUMP = 50;
 const ANIMATED_LINE_ALPHA = 0.15;
 const STATIC_LINE_ALPHA = 0.65;
+const DRAG_BUILD_THROTTLE_MS = 28;
+const DRAG_TRACE_OPTIONS = {
+  stepSize: 0.034,
+  maxSteps: 300,
+  seedDensityMultiplier: 0.78,
+  occupancyResolution: 150,
+} as const;
 
 /** Returns the sign of the nearest source charge to a world-space point. */
 function nearestChargeSign(point: Vector2Like, charges: Charge[]): number {
@@ -448,8 +455,12 @@ export function FieldLinesCanvas({
   const needsRenderRef = useRef(true);
   const requestRenderRef = useRef<(() => void) | null>(null);
 
-  const rebuildFieldLines = useCallback(() => {
-    const rebuilt = buildFieldLines(chargesRef.current, boundsRef.current);
+  const rebuildFieldLines = useCallback((useDragQuality = false) => {
+    const rebuilt = buildFieldLines(
+      chargesRef.current,
+      boundsRef.current,
+      useDragQuality ? DRAG_TRACE_OPTIONS : undefined,
+    );
     linesRef.current = rebuilt;
     flowPathsRef.current = buildFlowPaths(rebuilt, chargesRef.current);
     lastBuildAtRef.current = performance.now();
@@ -463,16 +474,16 @@ export function FieldLinesCanvas({
         window.clearTimeout(buildThrottleTimerRef.current);
         buildThrottleTimerRef.current = null;
       }
-      rebuildFieldLines();
+      rebuildFieldLines(false);
       return;
     }
 
     // Charge dragging can trigger many rapid updates, so rebuilds are lightly
     // throttled to keep the rest of the scene responsive.
-    const throttleMs = 16;
+    const throttleMs = DRAG_BUILD_THROTTLE_MS;
     const elapsed = performance.now() - lastBuildAtRef.current;
     if (elapsed >= throttleMs) {
-      rebuildFieldLines();
+      rebuildFieldLines(true);
       return;
     }
     if (buildThrottleTimerRef.current !== null) {
@@ -480,7 +491,7 @@ export function FieldLinesCanvas({
     }
     buildThrottleTimerRef.current = window.setTimeout(() => {
       buildThrottleTimerRef.current = null;
-      rebuildFieldLines();
+      rebuildFieldLines(true);
     }, throttleMs - elapsed);
   }, [rebuildFieldLines]);
 
@@ -513,9 +524,9 @@ export function FieldLinesCanvas({
   useEffect(() => {
     isDraggingRef.current = isDragging;
     if (!isDragging) {
-      scheduleFieldLineBuild();
+      rebuildFieldLines(false);
     }
-  }, [isDragging, scheduleFieldLineBuild]);
+  }, [isDragging, rebuildFieldLines]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
