@@ -132,6 +132,7 @@ export function ElectricFieldSandbox() {
     zoom,
     offsetX,
     offsetY,
+    isPanning,
     baseBounds,
     viewBounds,
     getWorldFromClientPoint,
@@ -532,6 +533,7 @@ export function ElectricFieldSandbox() {
           zoom={zoom}
           offsetX={offsetX}
           offsetY={offsetY}
+          isPanning={isPanning}
           isSimulating={isSimulating}
           contourInterval={contourInterval}
           contourOpacity={showEquipotentialLines ? 0.92 : 0}
@@ -551,6 +553,7 @@ export function ElectricFieldSandbox() {
           <VectorFieldCanvas
             charges={charges}
             bounds={viewBounds}
+            isPanning={isPanning}
             className="pointer-events-none absolute inset-0 h-full w-full"
           />
         ) : null}

@@ -78,6 +78,7 @@ type FieldHeatmapProps = {
   zoom: number;
   offsetX: number;
   offsetY: number;
+  isPanning?: boolean;
   isSimulating: boolean;
   contourInterval?: number;
   contourOpacity?: number;
@@ -203,6 +204,7 @@ export function FieldHeatmap({
   zoom,
   offsetX,
   offsetY,
+  isPanning = false,
   isSimulating,
   contourInterval = 1,
   contourOpacity = 0,
@@ -220,6 +222,7 @@ export function FieldHeatmap({
   const opacityCurrentRef = useRef(opacity);
   const contourIntervalRef = useRef(contourInterval);
   const contourOpacityRef = useRef(contourOpacity);
+  const isPanningRef = useRef(isPanning);
   const needsRenderRef = useRef(true);
   const requestRenderRef = useRef<(() => void) | null>(null);
 
@@ -274,6 +277,24 @@ export function FieldHeatmap({
   }, [contourOpacity]);
 
   useEffect(() => {
+    isPanningRef.current = isPanning;
+    const canvas = canvasRef.current;
+    if (!canvas) {
+      return;
+    }
+    const rect = canvas.getBoundingClientRect();
+    if (!rect.width || !rect.height) {
+      return;
+    }
+    const dpr = window.devicePixelRatio || 1;
+    const effectiveDpr = isPanning ? Math.max(0.7, dpr * 0.72) : dpr;
+    canvas.width = Math.floor(rect.width * effectiveDpr);
+    canvas.height = Math.floor(rect.height * effectiveDpr);
+    needsRenderRef.current = true;
+    requestRenderRef.current?.();
+  }, [isPanning]);
+
+  useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) {
       return;
@@ -303,8 +324,9 @@ export function FieldHeatmap({
       const width = Math.max(1, Math.floor(entry.contentRect.width));
       const height = Math.max(1, Math.floor(entry.contentRect.height));
       const dpr = window.devicePixelRatio || 1;
-      canvas.width = Math.floor(width * dpr);
-      canvas.height = Math.floor(height * dpr);
+      const effectiveDpr = isPanningRef.current ? Math.max(0.7, dpr * 0.72) : dpr;
+      canvas.width = Math.floor(width * effectiveDpr);
+      canvas.height = Math.floor(height * effectiveDpr);
       canvas.style.width = `${width}px`;
       canvas.style.height = `${height}px`;
       needsRenderRef.current = true;

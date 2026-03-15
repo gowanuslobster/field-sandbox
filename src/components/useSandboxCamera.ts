@@ -48,6 +48,7 @@ export function useSandboxCamera({
   const [zoom, setZoom] = useState(1);
   const [offsetX, setOffsetX] = useState(0);
   const [offsetY, setOffsetY] = useState(0);
+  const [isPanning, setIsPanning] = useState(false);
 
   useEffect(() => {
     const element = containerRef.current;
@@ -203,6 +204,7 @@ export function useSandboxCamera({
       startOffsetX: cameraRef.current.offsetX,
       startOffsetY: cameraRef.current.offsetY,
     };
+    setIsPanning(true);
   }, []);
 
   // Allows right-drag or Space-drag panning to begin even if the initial
@@ -259,6 +261,7 @@ export function useSandboxCamera({
     flushPendingPan();
     panStateRef.current = null;
     pendingOffsetRef.current = null;
+    setIsPanning(false);
   }, [flushPendingPan]);
 
   const handleWheelZoom = useCallback((clientX: number, clientY: number, deltaY: number) => {
@@ -279,6 +282,7 @@ export function useSandboxCamera({
     zoom,
     offsetX,
     offsetY,
+    isPanning,
     baseBounds,
     viewBounds,
     getWorldFromClientPoint,

@@ -11,6 +11,7 @@ import {
 type VectorFieldCanvasProps = {
   charges: Charge[];
   bounds: WorldBounds;
+  isPanning?: boolean;
   className?: string;
 };
 
@@ -37,19 +38,33 @@ function mixColor(a: Rgb, b: Rgb, t: number): Rgb {
 export function VectorFieldCanvas({
   charges,
   bounds,
+  isPanning = false,
   className,
 }: VectorFieldCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const chargesRef = useRef(charges);
   const boundsRef = useRef(bounds);
+  const isPanningRef = useRef(isPanning);
+  const needsRenderRef = useRef(true);
+  const requestRenderRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     chargesRef.current = charges;
+    needsRenderRef.current = true;
+    requestRenderRef.current?.();
   }, [charges]);
 
   useEffect(() => {
     boundsRef.current = bounds;
+    needsRenderRef.current = true;
+    requestRenderRef.current?.();
   }, [bounds]);
+
+  useEffect(() => {
+    isPanningRef.current = isPanning;
+    needsRenderRef.current = true;
+    requestRenderRef.current?.();
+  }, [isPanning]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -57,7 +72,7 @@ export function VectorFieldCanvas({
       return;
     }
 
-    let animationFrame = 0;
+    let animationFrame: number | null = null;
     const resizeObserver = new ResizeObserver((entries) => {
       const entry = entries[0];
       if (!entry) {
@@ -70,6 +85,8 @@ export function VectorFieldCanvas({
       canvas.height = Math.floor(height * dpr);
       canvas.style.width = `${width}px`;
       canvas.style.height = `${height}px`;
+      needsRenderRef.current = true;
+      requestRenderRef.current?.();
     });
 
     resizeObserver.observe(canvas);
@@ -190,12 +207,29 @@ export function VectorFieldCanvas({
       }
 
       context.restore();
-      animationFrame = window.requestAnimationFrame(render);
     };
 
-    animationFrame = window.requestAnimationFrame(render);
+    const scheduleRender = () => {
+      if (animationFrame !== null) {
+        return;
+      }
+      animationFrame = window.requestAnimationFrame(() => {
+        animationFrame = null;
+        render();
+        needsRenderRef.current = false;
+      });
+    };
+
+    requestRenderRef.current = () => {
+      needsRenderRef.current = true;
+      scheduleRender();
+    };
+    scheduleRender();
     return () => {
-      window.cancelAnimationFrame(animationFrame);
+      requestRenderRef.current = null;
+      if (animationFrame !== null) {
+        window.cancelAnimationFrame(animationFrame);
+      }
       resizeObserver.disconnect();
     };
   }, []);
