@@ -52,6 +52,7 @@ type ParticlesCanvasProps = {
   bounds: WorldBounds;
   despawnBounds: WorldBounds;
   isSimulating: boolean;
+  isPaused?: boolean;
   className?: string;
   onControllerReady?: (controller: ParticlesController | null) => void;
   onParticleCountChange?: (count: number) => void;
@@ -83,6 +84,7 @@ export function ParticlesCanvas({
   bounds,
   despawnBounds,
   isSimulating,
+  isPaused = false,
   className,
   onControllerReady,
   onParticleCountChange,
@@ -93,6 +95,7 @@ export function ParticlesCanvas({
   const boundsRef = useRef(bounds);
   const despawnBoundsRef = useRef(despawnBounds);
   const isSimulatingRef = useRef(isSimulating);
+  const isPausedRef = useRef(isPaused);
   const particlesRef = useRef<ParticleSimulationState[]>([]);
   const frameTimeRef = useRef<number | null>(null);
   const idCounterRef = useRef(0);
@@ -267,6 +270,14 @@ export function ParticlesCanvas({
   }, [isSimulating]);
 
   useEffect(() => {
+    isPausedRef.current = isPaused;
+    if (particlesRef.current.length > 0) {
+      needsRenderRef.current = true;
+      requestRenderRef.current?.();
+    }
+  }, [isPaused]);
+
+  useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) {
       return;
@@ -433,14 +444,22 @@ export function ParticlesCanvas({
         frameTimeRef.current = time;
         const dt = Math.max(0.001, Math.min(0.03, (time - previousTime) / 1000));
 
-        if (isSimulatingRef.current && particlesRef.current.length > 0) {
+        // Paused particle motion still renders the current state, but skips
+        // advancing the numerical integration until playback resumes.
+        if (
+          isSimulatingRef.current &&
+          !isPausedRef.current &&
+          particlesRef.current.length > 0
+        ) {
           simulate(dt, time);
           needsRenderRef.current = true;
         }
         draw();
         needsRenderRef.current = false;
         const shouldContinue =
-          (isSimulatingRef.current && particlesRef.current.length > 0) ||
+          (isSimulatingRef.current &&
+            !isPausedRef.current &&
+            particlesRef.current.length > 0) ||
           needsRenderRef.current;
         if (shouldContinue) {
           scheduleRender();

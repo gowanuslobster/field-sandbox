@@ -11,6 +11,7 @@ import {
 } from "react";
 import { FieldHeatmap } from "@/components/FieldHeatmap";
 import { useChargeDragging } from "@/components/useChargeDragging";
+import { useCursorReadout } from "@/components/useCursorReadout";
 import { useSandboxCamera } from "@/components/useSandboxCamera";
 import {
   useSlingshotInteraction,
@@ -25,7 +26,6 @@ import {
   type ParticlesController,
 } from "@/components/ParticlesCanvas";
 import { VectorFieldCanvas } from "@/components/VectorFieldCanvas";
-import { calculateFieldAt, potentialAtPoint } from "@/physics/electrostatics";
 import {
   isGhostOrbitMatch,
 } from "@/physics/dynamics";
@@ -74,7 +74,6 @@ function toChargeClass(value: number, selected: boolean): string {
 
 export function ElectricFieldSandbox() {
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const probeDragRef = useRef(false);
   const particleSpawnerRef = useRef<
     ((position: Vector2Like) => { id: string; pos: Vector2Like; vel: Vector2Like }) | null
   >(null);
@@ -89,7 +88,6 @@ export function ElectricFieldSandbox() {
   const [mode, setMode] = useState<Mode>("select");
   const [charges, setCharges] = useState<Charge[]>(INITIAL_CHARGES);
   const [selectedChargeId, setSelectedChargeId] = useState<string | null>(null);
-  const [cursorPotential, setCursorPotential] = useState<number>(0);
   const [showHeatmap, setShowHeatmap] = useState(true);
   const [showVectorGrid, setShowVectorGrid] = useState(true);
   const [showFieldLineGradient, setShowFieldLineGradient] = useState(false);
@@ -100,10 +98,7 @@ export function ElectricFieldSandbox() {
   const [testParticleCount, setTestParticleCount] = useState(0);
   const [particleEnergySnapshot, setParticleEnergySnapshot] =
     useState<ParticleEnergySnapshot | null>(null);
-  const [probePosition, setProbePosition] = useState<Vector2Like>({
-    x: -0.18,
-    y: 0.18,
-  });
+  const [isParticleMotionPaused, setIsParticleMotionPaused] = useState(false);
   const setInteractionMode = useCallback((nextMode: Mode) => {
     modeRef.current = nextMode;
     setMode(nextMode);
@@ -116,6 +111,12 @@ export function ElectricFieldSandbox() {
     },
     [],
   );
+  const handleParticleCountChange = useCallback((count: number) => {
+    setTestParticleCount(count);
+    if (count === 0) {
+      setIsParticleMotionPaused(false);
+    }
+  }, []);
   const {
     size,
     zoom,
@@ -186,20 +187,21 @@ export function ElectricFieldSandbox() {
     particleLaunchRef,
     dragToVelocityScale: SLINGSHOT_DRAG_TO_VELOCITY,
   });
+  // Cursor hover readout is batched so field sampling does not commit React
+  // state on every raw pointer event.
+  const {
+    cursorReadout,
+    handleGlobalPointerMove: handleCursorReadoutPointerMove,
+    clearCursorReadout,
+  } = useCursorReadout({
+    getWorldFromClientPoint,
+    chargesRef,
+  });
 
   const isSimulating =
     isDraggingCharge ||
     fieldLineMode === "animated_dashes" ||
     testParticleCount > 0;
-  const probePotential = useMemo(
-    () => potentialAtPoint(probePosition, charges),
-    [charges, probePosition],
-  );
-  const probeField = useMemo(
-    () => calculateFieldAt(probePosition.x, probePosition.y, charges),
-    [charges, probePosition],
-  );
-
   const removeSelectedCharge = useCallback(() => {
     if (!selectedChargeId) {
       return;
@@ -230,43 +232,39 @@ export function ElectricFieldSandbox() {
         return;
       }
 
-      const world = getWorldFromClientPoint(event.clientX, event.clientY);
-      if (!world) {
-        return;
-      }
-
-      if (probeDragRef.current) {
-        setProbePosition(world);
-        return;
-      }
-
-      setCursorPotential(potentialAtPoint(world, chargesRef.current));
+      handleCursorReadoutPointerMove(event);
     };
 
     const onPointerUp = () => {
       handleSlingshotPointerUp();
       handleChargeDragPointerUp();
       endPan();
-      probeDragRef.current = false;
+    };
+
+    const onPointerLeaveWindow = () => {
+      clearCursorReadout();
     };
 
     window.addEventListener("pointermove", onPointerMove);
     window.addEventListener("pointerup", onPointerUp);
+    window.addEventListener("blur", onPointerLeaveWindow);
     return () => {
       window.removeEventListener("pointermove", onPointerMove);
       window.removeEventListener("pointerup", onPointerUp);
+      window.removeEventListener("blur", onPointerLeaveWindow);
     };
   }, [
-    getWorldFromClientPoint,
     handleChargeDragPointerMove,
     handleChargeDragPointerUp,
     handlePanPointerMove,
+    handleCursorReadoutPointerMove,
     handleSlingshotPointerMove,
     handleSlingshotPointerUp,
     hasActiveSlingshot,
     isDraggingCharge,
     maybeStartImplicitPan,
     endPan,
+    clearCursorReadout,
   ]);
 
   useEffect(() => {
@@ -345,36 +343,6 @@ export function ElectricFieldSandbox() {
     handleWheelZoom(event.clientX, event.clientY, event.deltaY);
   };
 
-  const probeScreen = worldToScreen(
-    probePosition,
-    viewBounds,
-    size.width,
-    size.height,
-  );
-  const probeFieldMagnitude = probeField.magnitude();
-  const probeDirection =
-    probeFieldMagnitude > 1e-6
-      ? probeField.scale(1 / probeFieldMagnitude)
-      : probeField;
-  const probeArrowWorldLength =
-    (viewBounds.maxX - viewBounds.minX) *
-    (0.017 + 0.03 * Math.min(1, Math.log1p(probeFieldMagnitude) / Math.log1p(10)));
-  const probeArrowWorldEnd = {
-    x: probePosition.x + probeDirection.x * probeArrowWorldLength,
-    y: probePosition.y + probeDirection.y * probeArrowWorldLength,
-  };
-  const probeArrowScreenEnd = worldToScreen(
-    probeArrowWorldEnd,
-    viewBounds,
-    size.width,
-    size.height,
-  );
-  const probeArrowDx = probeArrowScreenEnd.x - probeScreen.x;
-  const probeArrowDy = probeArrowScreenEnd.y - probeScreen.y;
-  const probeArrowLength = Math.hypot(probeArrowDx, probeArrowDy);
-  const probeArrowUx = probeArrowLength > 1e-6 ? probeArrowDx / probeArrowLength : 0;
-  const probeArrowUy = probeArrowLength > 1e-6 ? probeArrowDy / probeArrowLength : 0;
-  const probeHeadSize = 7;
   const slingshotOriginScreen = slingshotPreview
     ? worldToScreen(slingshotPreview.origin, viewBounds, size.width, size.height)
     : null;
@@ -530,6 +498,7 @@ export function ElectricFieldSandbox() {
             onClick={() => {
               clearSlingshot();
               particleClearRef.current?.();
+              setIsParticleMotionPaused(false);
               setInteractionMode("select");
             }}
             className="col-span-2 rounded-md bg-cyan-300/20 px-3 py-2 text-sm text-cyan-100 transition-colors duration-200 hover:bg-cyan-300/35"
@@ -692,31 +661,51 @@ export function ElectricFieldSandbox() {
 
         <div className="mt-4 rounded-lg border border-cyan-200/20 bg-cyan-950/20 px-3 py-2 text-xs">
           <p className="font-medium uppercase tracking-[0.15em] text-cyan-100/85">
-            Slope Probe
+            Field Strength Readout
           </p>
-          <div className="mt-2 space-y-1 text-cyan-100">
-            <p>
-              V: <span className="font-semibold">{probePotential.toFixed(3)}</span>
+          {cursorReadout ? (
+            <div className="mt-2 space-y-1 text-cyan-100">
+              <p>
+                V: <span className="font-semibold">{cursorReadout.potential.toFixed(3)}</span>
+              </p>
+              <p>
+                E:{" "}
+                <span className="font-semibold">
+                  ({cursorReadout.field.x.toFixed(3)}, {cursorReadout.field.y.toFixed(3)}) | |E|{" "}
+                  {cursorReadout.field.magnitude().toFixed(3)}
+                </span>
+              </p>
+              <p>
+                (x, y):{" "}
+                <span className="font-semibold">
+                  ({cursorReadout.position.x.toFixed(3)}, {cursorReadout.position.y.toFixed(3)})
+                </span>
+              </p>
+            </div>
+          ) : (
+            <p className="mt-2 text-cyan-100/80">
+              Move the cursor over the field to inspect local potential and force.
             </p>
-            <p>
-              E:{" "}
-              <span className="font-semibold">
-                ({probeField.x.toFixed(3)}, {probeField.y.toFixed(3)}) | |E|{" "}
-                {probeField.magnitude().toFixed(3)}
-              </span>
-            </p>
-            <p>
-              (x, y):{" "}
-              <span className="font-semibold">
-                ({probePosition.x.toFixed(3)}, {probePosition.y.toFixed(3)})
-              </span>
-            </p>
-          </div>
+          )}
         </div>
         <div className="mt-3 rounded-lg border border-amber-200/20 bg-amber-950/20 px-3 py-2 text-xs">
-          <p className="font-medium uppercase tracking-[0.15em] text-amber-100/85">
-            Energy HUD
-          </p>
+          <div className="flex items-center justify-between gap-3">
+            <p className="font-medium uppercase tracking-[0.15em] text-amber-100/85">
+              Energy Readout
+            </p>
+            <button
+              type="button"
+              onClick={() => setIsParticleMotionPaused((current) => !current)}
+              disabled={testParticleCount === 0}
+              className={`rounded-md px-2 py-1 text-[11px] font-medium transition-colors duration-200 ${
+                testParticleCount === 0
+                  ? "cursor-not-allowed bg-amber-100/10 text-amber-100/35"
+                  : "bg-amber-200/20 text-amber-100 hover:bg-amber-200/35"
+              }`}
+            >
+              {isParticleMotionPaused ? "Resume" : "Pause"}
+            </button>
+          </div>
           {particleEnergySnapshot ? (
             <div className="mt-2 space-y-1 text-amber-100">
               <p>
@@ -726,23 +715,29 @@ export function ElectricFieldSandbox() {
               <p>
                 E = KE + PE:{" "}
                 <span className="font-semibold">
-                  {particleEnergySnapshot.totalEnergy.toFixed(6)}
+                  {particleEnergySnapshot.totalEnergy.toFixed(2)}
                 </span>
               </p>
               <p>
                 KE / PE:{" "}
                 <span className="font-semibold">
-                  {particleEnergySnapshot.kineticEnergy.toFixed(6)} /{" "}
-                  {particleEnergySnapshot.potentialEnergy.toFixed(6)}
+                  {particleEnergySnapshot.kineticEnergy.toFixed(2)} /{" "}
+                  {particleEnergySnapshot.potentialEnergy.toFixed(2)}
                 </span>
               </p>
               <p>
-                Drift from baseline:{" "}
+                Energy conservation violation:{" "}
                 <span className="font-semibold">
                   {particleEnergySnapshot.driftPercent >= 0 ? "+" : ""}
-                  {particleEnergySnapshot.driftPercent.toFixed(3)}%
+                  {particleEnergySnapshot.driftPercent.toFixed(2)}%
                 </span>
               </p>
+              <p className="text-amber-100/80">
+                Small nonzero values come from imperfect trajectory simulation.
+              </p>
+              {isParticleMotionPaused ? (
+                <p className="text-amber-100/80">Particle motion is currently paused.</p>
+              ) : null}
             </div>
           ) : (
             <p className="mt-2 text-amber-100/80">Drop a test particle to monitor KE + PE.</p>
@@ -751,7 +746,6 @@ export function ElectricFieldSandbox() {
 
         <div className="mt-4 rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-xs">
           <p className="font-medium tracking-wide text-zinc-100">Charges: {charges.length}</p>
-          <p className="text-zinc-300">Cursor potential V ≈ {cursorPotential.toFixed(3)}</p>
           <p className="text-zinc-300">Test Particles: {testParticleCount}</p>
           <p className="mt-1 text-zinc-400">
             Tip: Wheel to zoom; pan with Select-drag/right-drag/Space-drag; drag a
@@ -764,6 +758,7 @@ export function ElectricFieldSandbox() {
         ref={containerRef}
         onPointerDownCapture={handleCanvasPointerDownCapture}
         onPointerDown={handleCanvasPointerDown}
+        onPointerLeave={clearCursorReadout}
         onPointerUp={endPan}
         onPointerCancel={endPan}
         onWheel={handleCanvasWheel}
@@ -808,8 +803,9 @@ export function ElectricFieldSandbox() {
           bounds={viewBounds}
           despawnBounds={particleDespawnBounds}
           isSimulating={isSimulating}
+          isPaused={isParticleMotionPaused}
           onControllerReady={handleParticleControllerReady}
-          onParticleCountChange={setTestParticleCount}
+          onParticleCountChange={handleParticleCountChange}
           onEnergySnapshotChange={setParticleEnergySnapshot}
           className="pointer-events-none absolute inset-0 h-full w-full"
         />
@@ -960,69 +956,7 @@ export function ElectricFieldSandbox() {
               </text>
             </>
           ) : null}
-          <line
-            x1={probeScreen.x}
-            y1={probeScreen.y}
-            x2={probeArrowScreenEnd.x}
-            y2={probeArrowScreenEnd.y}
-            stroke="rgba(184, 255, 247, 0.9)"
-            strokeWidth="2.1"
-            strokeLinecap="round"
-          />
-          <line
-            x1={probeArrowScreenEnd.x}
-            y1={probeArrowScreenEnd.y}
-            x2={
-              probeArrowScreenEnd.x -
-              probeArrowUx * probeHeadSize -
-              probeArrowUy * probeHeadSize * 0.6
-            }
-            y2={
-              probeArrowScreenEnd.y -
-              probeArrowUy * probeHeadSize +
-              probeArrowUx * probeHeadSize * 0.6
-            }
-            stroke="rgba(184, 255, 247, 0.9)"
-            strokeWidth="2"
-            strokeLinecap="round"
-          />
-          <line
-            x1={probeArrowScreenEnd.x}
-            y1={probeArrowScreenEnd.y}
-            x2={
-              probeArrowScreenEnd.x -
-              probeArrowUx * probeHeadSize +
-              probeArrowUy * probeHeadSize * 0.6
-            }
-            y2={
-              probeArrowScreenEnd.y -
-              probeArrowUy * probeHeadSize -
-              probeArrowUx * probeHeadSize * 0.6
-            }
-            stroke="rgba(184, 255, 247, 0.9)"
-            strokeWidth="2"
-            strokeLinecap="round"
-          />
         </svg>
-        <button
-          type="button"
-          onPointerDown={(event) => {
-            if (event.button !== 0) {
-              return;
-            }
-            if (modeRef.current === "drop_test_charge") {
-              return;
-            }
-            event.stopPropagation();
-            probeDragRef.current = true;
-          }}
-          className="absolute z-10 -translate-x-1/2 -translate-y-1/2 rounded-full border border-cyan-100/75 bg-cyan-200/25 p-1 text-[11px] text-cyan-50 shadow-[0_0_12px_rgba(103,232,249,0.65)]"
-          style={{ left: probeScreen.x, top: probeScreen.y }}
-          aria-label="Slope Probe"
-          title="Drag Slope Probe"
-        >
-          ⌖
-        </button>
 
         {charges.map((charge) => {
           const screen = worldToScreen(
