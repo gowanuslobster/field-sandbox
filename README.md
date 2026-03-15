@@ -8,6 +8,11 @@ Open the app, place charges, drag them around, launch test particles, and use th
 
 ### Build and reshape fields
 - Add positive and negative source charges.
+- Replace the current source layout with centered instructional presets:
+  - single positive charge
+  - single negative charge
+  - dipole
+  - quadrupole
 - Drag existing charges to new positions.
 - Remove the selected charge.
 - Adjust the selected charge magnitude with the slider in the control panel.
@@ -27,7 +32,8 @@ Open the app, place charges, drag them around, launch test particles, and use th
 ### Launch and study test charges
 - Use `Drop Test Charge` to place a particle and slingshot it with an initial velocity.
 - Watch particle trails over time.
-- Monitor the live energy HUD for total, kinetic, and potential energy.
+- Monitor the `Energy Readout` for total, kinetic, and potential energy.
+- Pause and resume particle motion from the `Energy Readout` panel.
 - Use the Ghost Orbit guide to estimate a circular-orbit launch near an attractive source.
   - The guide appears only while the drop tool is active and the pointer is engaged.
   - The ghost arrow is frozen at the initial drop point so you can compare your real drag vector against it.
@@ -59,7 +65,7 @@ http://localhost:3000/field-sandbox/
 ## How To Use The App
 
 ### 1. Set up charges
-Start in `Select / Drag` to inspect the default scene. Add charges with `+ Add Charge` or `- Add Charge`, then drag them to create the configuration you want.
+Start in `Select / Drag` to inspect the default scene. You can either build your own setup with `+ Add Charge` / `- Add Charge` or start from one of the centered preset configurations in the control panel.
 
 ### 2. Turn on the overlays you need
 Use the control panel to combine the potential heatmap, vector grid, field lines, and equipotential contours. Different combinations are useful for different questions:
@@ -76,8 +82,8 @@ If the drop point is dominated by an attractive source, a dashed guide arrow app
 - It is based on the same Plummer-softened force model used by the particle dynamics.
 - It stays fixed at the original drop location while you continue dragging.
 
-### 5. Read the energy HUD
-After launch, watch the energy panel to see how kinetic and potential energy trade off during motion and how stable the integration remains over time.
+### 5. Read the energy panel
+After launch, watch the `Energy Readout` to see how kinetic and potential energy trade off during motion, how well energy is conserved numerically, and pause/resume the particle if you want to inspect a frozen state.
 
 ## Current Implementation Notes
 
@@ -91,9 +97,11 @@ After launch, watch the energy panel to see how kinetic and potential energy tra
 - `FieldHeatmap` renders the background scalar field.
 - `FieldLinesCanvas`, `VectorFieldCanvas`, and `ParticlesCanvas` render dynamic overlays.
 - The slingshot preview and Ghost Orbit guide are drawn on the SVG interaction layer in the main sandbox component.
+- `FieldSandboxControlPanel` renders the floating instructional UI and readouts.
 
 ### Main files
 - [`src/components/ElectricFieldSandbox.tsx`](src/components/ElectricFieldSandbox.tsx): top-level interaction model, control panel, and overlay composition
+- [`src/components/FieldSandboxControlPanel.tsx`](src/components/FieldSandboxControlPanel.tsx): floating control panel, readouts, and preset buttons
 - [`src/components/FieldHeatmap.tsx`](src/components/FieldHeatmap.tsx): potential heatmap and contour rendering
 - [`src/components/FieldLinesCanvas.tsx`](src/components/FieldLinesCanvas.tsx): streamline rendering and animation
 - [`src/components/VectorFieldCanvas.tsx`](src/components/VectorFieldCanvas.tsx): sampled field-vector grid
