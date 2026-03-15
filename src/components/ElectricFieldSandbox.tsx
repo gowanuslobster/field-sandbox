@@ -10,6 +10,7 @@ import {
   useState,
 } from "react";
 import { FieldHeatmap } from "@/components/FieldHeatmap";
+import { useChargeDragging } from "@/components/useChargeDragging";
 import {
   FieldLinesCanvas,
   type FieldLineRenderMode,
@@ -93,7 +94,6 @@ function toChargeClass(value: number, selected: boolean): string {
 
 export function ElectricFieldSandbox() {
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const dragStateRef = useRef<{ chargeId: string } | null>(null);
   const slingshotRef = useRef<SlingshotSession | null>(null);
   const slingshotPreviewRef = useRef<SlingshotPreview | null>(null);
   const probeDragRef = useRef(false);
@@ -147,7 +147,6 @@ export function ElectricFieldSandbox() {
   const [contourDensity, setContourDensity] = useState(1.3);
   const [fieldLineMode, setFieldLineMode] =
     useState<FieldLineRenderMode>("static_arrows");
-  const [isDraggingCharge, setIsDraggingCharge] = useState(false);
   const [testParticleCount, setTestParticleCount] = useState(0);
   const [particleEnergySnapshot, setParticleEnergySnapshot] =
     useState<ParticleEnergySnapshot | null>(null);
@@ -238,18 +237,6 @@ export function ElectricFieldSandbox() {
     () => getViewBounds(baseBounds, { zoom: MIN_ZOOM, offsetX, offsetY }),
     [baseBounds, offsetX, offsetY],
   );
-  const isSimulating =
-    isDraggingCharge ||
-    fieldLineMode === "animated_dashes" ||
-    testParticleCount > 0;
-  const probePotential = useMemo(
-    () => potentialAtPoint(probePosition, charges),
-    [charges, probePosition],
-  );
-  const probeField = useMemo(
-    () => calculateFieldAt(probePosition.x, probePosition.y, charges),
-    [charges, probePosition],
-  );
 
   useEffect(() => {
     chargesRef.current = charges;
@@ -333,6 +320,33 @@ export function ElectricFieldSandbox() {
     );
   }, []);
 
+  // Charge dragging is handled as its own interaction subsystem so pointermove
+  // events can be batched before committing charge-position state.
+  const {
+    isDraggingCharge,
+    startChargeDrag,
+    handleGlobalPointerMove: handleChargeDragPointerMove,
+    handleGlobalPointerUp: handleChargeDragPointerUp,
+  } = useChargeDragging({
+    getWorldFromClientPoint,
+    setCharges,
+    setSelectedChargeId,
+    setInteractionMode,
+  });
+
+  const isSimulating =
+    isDraggingCharge ||
+    fieldLineMode === "animated_dashes" ||
+    testParticleCount > 0;
+  const probePotential = useMemo(
+    () => potentialAtPoint(probePosition, charges),
+    [charges, probePosition],
+  );
+  const probeField = useMemo(
+    () => calculateFieldAt(probePosition.x, probePosition.y, charges),
+    [charges, probePosition],
+  );
+
   const zoomByFactor = useCallback(
     (factor: number) => {
       const element = containerRef.current;
@@ -355,13 +369,6 @@ export function ElectricFieldSandbox() {
     setOffsetY(0);
   }, []);
 
-  const startDrag = (chargeId: string) => {
-    dragStateRef.current = { chargeId };
-    setIsDraggingCharge(true);
-    setSelectedChargeId(chargeId);
-    setInteractionMode("select");
-  };
-
   const removeSelectedCharge = useCallback(() => {
     if (!selectedChargeId) {
       return;
@@ -374,7 +381,7 @@ export function ElectricFieldSandbox() {
 
   useEffect(() => {
     const onPointerMove = (event: PointerEvent) => {
-      if (!panStateRef.current && !dragStateRef.current && !slingshotRef.current) {
+      if (!panStateRef.current && !isDraggingCharge && !slingshotRef.current) {
         const wantsRightPan = (event.buttons & 2) === 2;
         const wantsSpacePan =
           isSpacePressedRef.current && (event.buttons & 1) === 1;
@@ -389,6 +396,10 @@ export function ElectricFieldSandbox() {
       }
 
       if (panFromClientDelta(event.clientX, event.clientY)) {
+        return;
+      }
+
+      if (handleChargeDragPointerMove(event)) {
         return;
       }
 
@@ -433,17 +444,6 @@ export function ElectricFieldSandbox() {
       }
 
       setCursorPotential(potentialAtPoint(world, chargesRef.current));
-      const dragging = dragStateRef.current;
-      if (!dragging) {
-        return;
-      }
-      setCharges((current) =>
-        current.map((charge) =>
-          charge.id === dragging.chargeId
-            ? { ...charge, position: { x: world.x, y: world.y } }
-            : charge,
-        ),
-      );
     };
 
     const onPointerUp = () => {
@@ -469,10 +469,9 @@ export function ElectricFieldSandbox() {
         setSlingshotPreview(null);
         slingshotPreviewRef.current = null;
       }
-      dragStateRef.current = null;
+      handleChargeDragPointerUp();
       panStateRef.current = null;
       probeDragRef.current = false;
-      setIsDraggingCharge(false);
     };
 
     window.addEventListener("pointermove", onPointerMove);
@@ -481,7 +480,13 @@ export function ElectricFieldSandbox() {
       window.removeEventListener("pointermove", onPointerMove);
       window.removeEventListener("pointerup", onPointerUp);
     };
-  }, [getWorldFromClientPoint, panFromClientDelta]);
+  }, [
+    getWorldFromClientPoint,
+    handleChargeDragPointerMove,
+    handleChargeDragPointerUp,
+    isDraggingCharge,
+    panFromClientDelta,
+  ]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -1373,7 +1378,7 @@ export function ElectricFieldSandbox() {
                   return;
                 }
                 event.stopPropagation();
-                startDrag(charge.id);
+                startChargeDrag(charge.id);
               }}
               className={toChargeClass(charge.value, selected)}
               style={{
