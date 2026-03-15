@@ -19,14 +19,13 @@ Open the app, place charges, drag them around, launch test particles, and use th
 - Enable contour-style equipotential overlays.
 - Increase or decrease contour density.
 
-### Probe local values
-- Drag the slope probe anywhere in the scene.
+### Inspect local values
+- Move the cursor anywhere in the scene.
 - Read the local potential `V`.
-- Read the local field vector `E` and its magnitude.
+- Read the local field vector `E = [Ex, Ey]` and its magnitude.
 
 ### Launch and study test charges
 - Use `Drop Test Charge` to place a particle and slingshot it with an initial velocity.
-- Re-grab an existing test particle and relaunch it.
 - Watch particle trails over time.
 - Monitor the live energy HUD for total, kinetic, and potential energy.
 - Use the Ghost Orbit guide to estimate a circular-orbit launch near an attractive source.
@@ -64,7 +63,7 @@ Start in `Select / Drag` to inspect the default scene. Add charges with `+ Add C
 
 ### 2. Turn on the overlays you need
 Use the control panel to combine the potential heatmap, vector grid, field lines, and equipotential contours. Different combinations are useful for different questions:
-- Heatmap + probe: local potential and gradient intuition
+- Heatmap + cursor readout: local potential and gradient intuition
 - Field lines + vector grid: direction and flow structure
 - Equipotentials + field lines: orthogonality and geometric relationships
 
@@ -91,7 +90,7 @@ After launch, watch the energy panel to see how kinetic and potential energy tra
 ### Rendering model
 - `FieldHeatmap` renders the background scalar field.
 - `FieldLinesCanvas`, `VectorFieldCanvas`, and `ParticlesCanvas` render dynamic overlays.
-- The slingshot preview, probe arrow, and Ghost Orbit guide are drawn on the SVG interaction layer in the main sandbox component.
+- The slingshot preview and Ghost Orbit guide are drawn on the SVG interaction layer in the main sandbox component.
 
 ### Main files
 - [`src/components/ElectricFieldSandbox.tsx`](src/components/ElectricFieldSandbox.tsx): top-level interaction model, control panel, and overlay composition

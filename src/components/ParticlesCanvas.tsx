@@ -23,18 +23,11 @@ type SpawnParticle = (
   position: Vector2Like,
 ) => { id: string; pos: Vector2Like; vel: Vector2Like };
 type ClearParticles = () => void;
-type PickParticle = (
-  worldPosition: Vector2Like,
-  radiusWorld: number,
-) => { id: string; pos: Vector2Like; vel: Vector2Like } | null;
-type SetParticleFrozen = (id: string, frozen: boolean) => void;
 type LaunchParticle = (id: string, velocity: Vector2Like) => void;
 
 export type ParticlesController = {
   spawn: SpawnParticle;
   clear: ClearParticles;
-  pickAt: PickParticle;
-  setFrozen: SetParticleFrozen;
   launch: LaunchParticle;
 };
 export type ParticleEnergySnapshot = {
@@ -59,6 +52,7 @@ type ParticlesCanvasProps = {
   bounds: WorldBounds;
   despawnBounds: WorldBounds;
   isSimulating: boolean;
+  isPaused?: boolean;
   className?: string;
   onControllerReady?: (controller: ParticlesController | null) => void;
   onParticleCountChange?: (count: number) => void;
@@ -85,11 +79,16 @@ function appendHistory(history: Vector2D[], point: Vector2D): Vector2D[] {
   return [...history, point];
 }
 
+/**
+ * Simulates and renders launched test particles on a canvas layer while
+ * exposing a small command-style control API back to the sandbox.
+ */
 export function ParticlesCanvas({
   charges,
   bounds,
   despawnBounds,
   isSimulating,
+  isPaused = false,
   className,
   onControllerReady,
   onParticleCountChange,
@@ -100,6 +99,7 @@ export function ParticlesCanvas({
   const boundsRef = useRef(bounds);
   const despawnBoundsRef = useRef(despawnBounds);
   const isSimulatingRef = useRef(isSimulating);
+  const isPausedRef = useRef(isPaused);
   const particlesRef = useRef<ParticleSimulationState[]>([]);
   const frameTimeRef = useRef<number | null>(null);
   const idCounterRef = useRef(0);
@@ -109,6 +109,7 @@ export function ParticlesCanvas({
   const needsRenderRef = useRef(true);
   const requestRenderRef = useRef<(() => void) | null>(null);
 
+  // The parent HUD only needs updates when the count actually changes.
   const emitParticleCount = useCallback(() => {
     const nextCount = particlesRef.current.length;
     if (nextCount === particleCountRef.current) {
@@ -118,6 +119,8 @@ export function ParticlesCanvas({
     onParticleCountChange?.(nextCount);
   }, [onParticleCountChange]);
 
+  // Energy tracking follows one active particle at a time so the readout stays
+  // stable instead of jumping between every particle in flight.
   const emitEnergySnapshot = useCallback(() => {
     if (!onEnergySnapshotChange) {
       return;
@@ -206,56 +209,6 @@ export function ParticlesCanvas({
     requestRenderRef.current?.();
   }, [emitEnergySnapshot, emitParticleCount]);
 
-  const pickAt = useCallback<PickParticle>((worldPosition, radiusWorld) => {
-    const radiusSquared = radiusWorld * radiusWorld;
-    let bestMatch: {
-      id: string;
-      pos: Vector2Like;
-      vel: Vector2Like;
-      distanceSquared: number;
-    } | null = null;
-    for (let index = particlesRef.current.length - 1; index >= 0; index -= 1) {
-      const state = particlesRef.current[index];
-      const dx = state.particle.pos.x - worldPosition.x;
-      const dy = state.particle.pos.y - worldPosition.y;
-      const distanceSquared = dx * dx + dy * dy;
-      if (
-        distanceSquared <= radiusSquared &&
-        (!bestMatch || distanceSquared < bestMatch.distanceSquared)
-      ) {
-        bestMatch = {
-          id: state.id,
-          pos: state.particle.pos,
-          vel: state.particle.vel,
-          distanceSquared,
-        };
-      }
-    }
-    if (!bestMatch) {
-      return null;
-    }
-    return {
-      id: bestMatch.id,
-      pos: bestMatch.pos,
-      vel: bestMatch.vel,
-    };
-  }, []);
-
-  const setFrozen = useCallback<SetParticleFrozen>((id, frozen) => {
-    particlesRef.current = particlesRef.current.map((state) =>
-      state.id === id
-        ? {
-            ...state,
-            frozen,
-            unfreezeAtMs: frozen ? null : state.unfreezeAtMs,
-          }
-        : state,
-    );
-    needsRenderRef.current = true;
-    requestRenderRef.current?.();
-    emitEnergySnapshot();
-  }, [emitEnergySnapshot]);
-
   const launchParticle = useCallback<LaunchParticle>((id, velocity) => {
     particlesRef.current = particlesRef.current.map((state) => {
       if (state.id !== id) {
@@ -272,6 +225,8 @@ export function ParticlesCanvas({
           vel: velocityVector,
         },
         history:
+          // Large launch changes start a fresh trail so the visual path matches
+          // the new motion students just created.
           velocityDelta > VELOCITY_RESET_TRAIL_THRESHOLD
             ? [state.particle.pos]
             : state.history,
@@ -283,11 +238,11 @@ export function ParticlesCanvas({
   }, [emitEnergySnapshot]);
 
   useEffect(() => {
+    // This control API lets the sandbox create, clear, and launch particles
+    // without pushing the full simulation state up into React.
     onControllerReady?.({
       spawn: spawnParticle,
       clear: clearParticles,
-      pickAt,
-      setFrozen,
       launch: launchParticle,
     });
     return () => onControllerReady?.(null);
@@ -295,8 +250,6 @@ export function ParticlesCanvas({
     clearParticles,
     launchParticle,
     onControllerReady,
-    pickAt,
-    setFrozen,
     spawnParticle,
   ]);
 
@@ -326,6 +279,14 @@ export function ParticlesCanvas({
       requestRenderRef.current?.();
     }
   }, [isSimulating]);
+
+  useEffect(() => {
+    isPausedRef.current = isPaused;
+    if (particlesRef.current.length > 0) {
+      needsRenderRef.current = true;
+      requestRenderRef.current?.();
+    }
+  }, [isPaused]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -360,6 +321,7 @@ export function ParticlesCanvas({
 
       const nextParticles: ParticleSimulationState[] = [];
       const targetDt = Math.max(0.0001, dt);
+      // Large frame gaps are subdivided so fast particle motion stays stable.
       const substeps = Math.max(
         1,
         Math.min(MAX_SUBSTEPS_PER_FRAME, Math.ceil(targetDt / PHYSICS_BASE_DT)),
@@ -372,6 +334,8 @@ export function ParticlesCanvas({
           nowMs >= state.unfreezeAtMs
             ? { ...state, frozen: false, unfreezeAtMs: null }
             : state;
+        // Newly spawned particles stay frozen briefly so students can finish
+        // the launch gesture before motion begins.
         if (thawedState.frozen) {
           nextParticles.push(thawedState);
           continue;
@@ -435,6 +399,8 @@ export function ParticlesCanvas({
       context.globalCompositeOperation = "lighter";
 
       for (const state of particlesRef.current) {
+        // Trails are smoothed visually even though the particle integration is
+        // sampled in discrete substeps.
         if (state.history.length > 1) {
           context.beginPath();
           const firstPoint = transformWorldPoint(state.history[0], transform);
@@ -494,14 +460,22 @@ export function ParticlesCanvas({
         frameTimeRef.current = time;
         const dt = Math.max(0.001, Math.min(0.03, (time - previousTime) / 1000));
 
-        if (isSimulatingRef.current && particlesRef.current.length > 0) {
+        // Paused particle motion still renders the current state, but skips
+        // advancing the numerical integration until playback resumes.
+        if (
+          isSimulatingRef.current &&
+          !isPausedRef.current &&
+          particlesRef.current.length > 0
+        ) {
           simulate(dt, time);
           needsRenderRef.current = true;
         }
         draw();
         needsRenderRef.current = false;
         const shouldContinue =
-          (isSimulatingRef.current && particlesRef.current.length > 0) ||
+          (isSimulatingRef.current &&
+            !isPausedRef.current &&
+            particlesRef.current.length > 0) ||
           needsRenderRef.current;
         if (shouldContinue) {
           scheduleRender();

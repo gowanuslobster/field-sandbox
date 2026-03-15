@@ -13,6 +13,7 @@ import {
 
 export type FieldLineRenderMode = "animated_dashes" | "static_arrows" | "off";
 
+// Props for the canvas layer that renders field-line geometry and animation.
 type FieldLinesCanvasProps = {
   charges: Charge[];
   bounds: WorldBounds;
@@ -23,11 +24,13 @@ type FieldLinesCanvasProps = {
   className?: string;
 };
 
+// Tracks one moving highlight particle along an already-traced field line.
 type FlowParticle = {
   progress: number;
   wrappedThisFrame: boolean;
 };
 
+// Stores sampled geometry plus derived path-length data for one traced line.
 type FlowPath = {
   points: Vector2Like[];
   cumulativeLengths: number[];
@@ -43,7 +46,15 @@ const TRAIL_SEGMENTS = 4;
 const MAX_TRAIL_PIXEL_JUMP = 50;
 const ANIMATED_LINE_ALPHA = 0.15;
 const STATIC_LINE_ALPHA = 0.65;
+const DRAG_BUILD_THROTTLE_MS = 28;
+const DRAG_TRACE_OPTIONS = {
+  stepSize: 0.034,
+  maxSteps: 300,
+  seedDensityMultiplier: 0.78,
+  occupancyResolution: 150,
+} as const;
 
+/** Returns the sign of the nearest source charge to a world-space point. */
 function nearestChargeSign(point: Vector2Like, charges: Charge[]): number {
   let bestDistance = Number.POSITIVE_INFINITY;
   let sign = 0;
@@ -59,6 +70,10 @@ function nearestChargeSign(point: Vector2Like, charges: Charge[]): number {
   return sign;
 }
 
+/**
+ * Orients traced field lines so animated particles move from positive toward
+ * negative charges when the local geometry makes that direction meaningful.
+ */
 function orientLineForFlow(points: Vector2Like[], charges: Charge[]): Vector2Like[] {
   if (points.length < 2) {
     return points;
@@ -83,6 +98,10 @@ function orientLineForFlow(points: Vector2Like[], charges: Charge[]): Vector2Lik
   return [...points].reverse();
 }
 
+/**
+ * Converts traced streamline points into reusable path data for the animated
+ * field-flow overlay.
+ */
 function buildFlowPaths(lines: Vector2D[][], charges: Charge[]): FlowPath[] {
   const paths: FlowPath[] = [];
   lines.forEach((rawLine, lineIndex) => {
@@ -126,6 +145,7 @@ function buildFlowPaths(lines: Vector2D[][], charges: Charge[]): FlowPath[] {
   return paths;
 }
 
+/** Locates the path segment that contains a cumulative-distance sample. */
 function findSegmentIndex(cumulativeValues: number[], value: number): number {
   let low = 0;
   let high = cumulativeValues.length - 2;
@@ -144,6 +164,7 @@ function findSegmentIndex(cumulativeValues: number[], value: number): number {
   return Math.max(0, Math.min(cumulativeValues.length - 2, low));
 }
 
+/** Samples an interpolated world-space point at a normalized path progress value. */
 function samplePathPosition(
   path: FlowPath,
   progress: number,
@@ -174,6 +195,10 @@ function samplePathPosition(
   };
 }
 
+/**
+ * Advances the animated flow particles, scaling their speed by the local field
+ * strength so stronger regions feel more active.
+ */
 function updateFlowParticles(
   flowPaths: FlowPath[],
   charges: Charge[],
@@ -195,6 +220,7 @@ function updateFlowParticles(
   }
 }
 
+/** Maps local potential to the warm/cool gradient used for field-line coloring. */
 function mapPotentialToColor(potential: number, alpha: number): string {
   const normalized = Math.tanh(potential * 0.2);
   if (normalized >= 0) {
@@ -205,6 +231,7 @@ function mapPotentialToColor(potential: number, alpha: number): string {
   return `rgba(${red}, 214, 255, ${alpha})`;
 }
 
+/** Draws one traced field line as a polyline, optionally using a potential gradient. */
 function drawPolyline(
   context: CanvasRenderingContext2D,
   points: Vector2Like[],
@@ -245,6 +272,7 @@ function drawPolyline(
   context.stroke();
 }
 
+/** Places a few direction arrows along a static field line for visual flow cues. */
 function drawDirectionArrows(
   context: CanvasRenderingContext2D,
   points: Vector2Like[],
@@ -333,6 +361,7 @@ function drawDirectionArrows(
   }
 }
 
+/** Draws the short glowing trails for the animated field-flow particles. */
 function drawFlowTrails(
   context: CanvasRenderingContext2D,
   flowPaths: FlowPath[],
@@ -398,6 +427,10 @@ function drawFlowTrails(
   }
 }
 
+/**
+ * Draws static or animated field lines on a canvas layer and rebuilds the
+ * streamline geometry when charges or camera bounds change.
+ */
 export function FieldLinesCanvas({
   charges,
   bounds,
@@ -422,8 +455,12 @@ export function FieldLinesCanvas({
   const needsRenderRef = useRef(true);
   const requestRenderRef = useRef<(() => void) | null>(null);
 
-  const rebuildFieldLines = useCallback(() => {
-    const rebuilt = buildFieldLines(chargesRef.current, boundsRef.current);
+  const rebuildFieldLines = useCallback((useDragQuality = false) => {
+    const rebuilt = buildFieldLines(
+      chargesRef.current,
+      boundsRef.current,
+      useDragQuality ? DRAG_TRACE_OPTIONS : undefined,
+    );
     linesRef.current = rebuilt;
     flowPathsRef.current = buildFlowPaths(rebuilt, chargesRef.current);
     lastBuildAtRef.current = performance.now();
@@ -437,14 +474,16 @@ export function FieldLinesCanvas({
         window.clearTimeout(buildThrottleTimerRef.current);
         buildThrottleTimerRef.current = null;
       }
-      rebuildFieldLines();
+      rebuildFieldLines(false);
       return;
     }
 
-    const throttleMs = 16;
+    // Charge dragging can trigger many rapid updates, so rebuilds are lightly
+    // throttled to keep the rest of the scene responsive.
+    const throttleMs = DRAG_BUILD_THROTTLE_MS;
     const elapsed = performance.now() - lastBuildAtRef.current;
     if (elapsed >= throttleMs) {
-      rebuildFieldLines();
+      rebuildFieldLines(true);
       return;
     }
     if (buildThrottleTimerRef.current !== null) {
@@ -452,7 +491,7 @@ export function FieldLinesCanvas({
     }
     buildThrottleTimerRef.current = window.setTimeout(() => {
       buildThrottleTimerRef.current = null;
-      rebuildFieldLines();
+      rebuildFieldLines(true);
     }, throttleMs - elapsed);
   }, [rebuildFieldLines]);
 
@@ -485,9 +524,9 @@ export function FieldLinesCanvas({
   useEffect(() => {
     isDraggingRef.current = isDragging;
     if (!isDragging) {
-      scheduleFieldLineBuild();
+      rebuildFieldLines(false);
     }
-  }, [isDragging, scheduleFieldLineBuild]);
+  }, [isDragging, rebuildFieldLines]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -553,6 +592,8 @@ export function FieldLinesCanvas({
           ? ANIMATED_LINE_ALPHA
           : STATIC_LINE_ALPHA;
 
+      // Static and animated modes share the same traced geometry; only the
+      // teaching overlay changes between arrows and moving particles.
       for (const line of linesRef.current) {
         drawPolyline(
           context,

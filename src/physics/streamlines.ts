@@ -11,6 +11,8 @@ type TraceOptions = {
   seedOffsetRadius: number;
   angularOffset: number;
   adaptiveStepThreshold: number;
+  seedDensityMultiplier: number;
+  occupancyResolution: number;
 };
 
 const DEFAULT_TRACE_OPTIONS: TraceOptions = {
@@ -22,6 +24,8 @@ const DEFAULT_TRACE_OPTIONS: TraceOptions = {
   seedOffsetRadius: 0.076,
   angularOffset: 0.08,
   adaptiveStepThreshold: 0.24,
+  seedDensityMultiplier: 1,
+  occupancyResolution: 180,
 };
 
 function inBounds(point: Vector2Like, bounds: WorldBounds): boolean {
@@ -219,7 +223,10 @@ export function buildSeedPoints(
       continue;
     }
     const directionSign = charge.value >= 0 ? 1 : -1;
-    const seedsForCharge = Math.max(8, Math.floor(Math.abs(charge.value) * 12));
+    const seedsForCharge = Math.max(
+      8,
+      Math.floor(Math.abs(charge.value) * 12 * mergedOptions.seedDensityMultiplier),
+    );
     const chargeAngularOffset =
       mergedOptions.angularOffset + chargeIndex * 0.097;
     for (let lineIndex = 0; lineIndex < seedsForCharge; lineIndex += 1) {
@@ -238,9 +245,10 @@ export function buildSeedPoints(
 export function buildFieldLines(
   charges: Charge[],
   bounds: WorldBounds,
+  options?: Partial<TraceOptions>,
 ): Vector2D[][] {
-  const options = { ...DEFAULT_TRACE_OPTIONS };
-  const seeds = buildSeedPoints(charges, bounds, options);
+  const mergedOptions = { ...DEFAULT_TRACE_OPTIONS, ...options };
+  const seeds = buildSeedPoints(charges, bounds, mergedOptions);
   const lines: Vector2D[][] = [];
   const occupiedCells = new Set<string>();
 
@@ -251,13 +259,17 @@ export function buildFieldLines(
       bounds,
       directionSign,
       sourceChargeId,
-      options,
+      mergedOptions,
     );
     if (line.length > 12) {
       let sampled = 0;
       let overlap = 0;
       for (let index = 0; index < line.length; index += 6) {
-        const key = toSpatialCellKey(line[index], bounds, 180);
+        const key = toSpatialCellKey(
+          line[index],
+          bounds,
+          mergedOptions.occupancyResolution,
+        );
         if (!key) {
           continue;
         }
@@ -273,7 +285,11 @@ export function buildFieldLines(
 
       lines.push(line);
       for (let index = 0; index < line.length; index += 4) {
-        const key = toSpatialCellKey(line[index], bounds, 180);
+        const key = toSpatialCellKey(
+          line[index],
+          bounds,
+          mergedOptions.occupancyResolution,
+        );
         if (key) {
           occupiedCells.add(key);
         }
