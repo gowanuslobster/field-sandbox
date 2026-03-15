@@ -11,6 +11,7 @@ import {
 } from "react";
 import { FieldHeatmap } from "@/components/FieldHeatmap";
 import { useChargeDragging } from "@/components/useChargeDragging";
+import { useSandboxCamera } from "@/components/useSandboxCamera";
 import {
   useSlingshotInteraction,
 } from "@/components/useSlingshotInteraction";
@@ -28,13 +29,9 @@ import { calculateFieldAt, potentialAtPoint } from "@/physics/electrostatics";
 import {
   isGhostOrbitMatch,
 } from "@/physics/dynamics";
-import type { Charge, WorldBounds } from "@/physics/types";
+import type { Charge } from "@/physics/types";
 import type { Vector2Like } from "@/physics/vector2d";
-import {
-  getViewBounds,
-  screenToWorld,
-  worldToScreen,
-} from "@/physics/world-space";
+import { getViewBounds, worldToScreen } from "@/physics/world-space";
 
 type Mode = "select" | "add_positive" | "add_negative" | "drop_test_charge";
 
@@ -85,32 +82,14 @@ export function ElectricFieldSandbox() {
   const particleLaunchRef = useRef<
     ((id: string, velocity: Vector2Like) => void) | null
   >(null);
-  const panStateRef = useRef<{
-    startX: number;
-    startY: number;
-    startOffsetX: number;
-    startOffsetY: number;
-  } | null>(null);
   const isSpacePressedRef = useRef(false);
   const modeRef = useRef<Mode>("select");
-  const cameraRef = useRef({ offsetX: 0, offsetY: 0 });
-  const zoomRef = useRef(1);
   const chargesRef = useRef(INITIAL_CHARGES);
-  const boundsRef = useRef<WorldBounds>({
-    minX: -1.6,
-    maxX: 1.6,
-    minY: -1.1,
-    maxY: 1.1,
-  });
 
-  const [size, setSize] = useState({ width: 1280, height: 760 });
   const [mode, setMode] = useState<Mode>("select");
   const [charges, setCharges] = useState<Charge[]>(INITIAL_CHARGES);
   const [selectedChargeId, setSelectedChargeId] = useState<string | null>(null);
   const [cursorPotential, setCursorPotential] = useState<number>(0);
-  const [zoom, setZoom] = useState(1);
-  const [offsetX, setOffsetX] = useState(0);
-  const [offsetY, setOffsetY] = useState(0);
   const [showHeatmap, setShowHeatmap] = useState(true);
   const [showVectorGrid, setShowVectorGrid] = useState(true);
   const [showFieldLineGradient, setShowFieldLineGradient] = useState(false);
@@ -137,61 +116,26 @@ export function ElectricFieldSandbox() {
     },
     [],
   );
-
-  const panFromClientDelta = useCallback((clientX: number, clientY: number) => {
-    const activePan = panStateRef.current;
-    if (!activePan) {
-      return false;
-    }
-    const element = containerRef.current;
-    if (!element) {
-      return false;
-    }
-    const rect = element.getBoundingClientRect();
-    if (!rect.width || !rect.height) {
-      return false;
-    }
-    const spanX = boundsRef.current.maxX - boundsRef.current.minX;
-    const spanY = boundsRef.current.maxY - boundsRef.current.minY;
-    const dx = clientX - activePan.startX;
-    const dy = clientY - activePan.startY;
-    setOffsetX(activePan.startOffsetX - (dx / rect.width) * spanX);
-    setOffsetY(activePan.startOffsetY + (dy / rect.height) * spanY);
-    return true;
-  }, []);
-
-  useEffect(() => {
-    const element = containerRef.current;
-    if (!element) {
-      return;
-    }
-
-    const observer = new ResizeObserver((entries) => {
-      const entry = entries[0];
-      if (!entry) {
-        return;
-      }
-      setSize({
-        width: Math.max(1, Math.floor(entry.contentRect.width)),
-        height: Math.max(1, Math.floor(entry.contentRect.height)),
-      });
-    });
-
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, []);
-
-  const baseBounds = useMemo<WorldBounds>(() => {
-    const aspect = size.width / Math.max(size.height, 1);
-    const halfY = 1.12;
-    const halfX = halfY * aspect;
-    return { minX: -halfX, maxX: halfX, minY: -halfY, maxY: halfY };
-  }, [size]);
-
-  const viewBounds = useMemo(
-    () => getViewBounds(baseBounds, { zoom, offsetX, offsetY }),
-    [baseBounds, zoom, offsetX, offsetY],
-  );
+  const {
+    size,
+    zoom,
+    offsetX,
+    offsetY,
+    baseBounds,
+    viewBounds,
+    getWorldFromClientPoint,
+    beginPan,
+    maybeStartImplicitPan,
+    handleGlobalPointerMove: handlePanPointerMove,
+    endPan,
+    handleWheelZoom,
+    zoomByFactor,
+    resetView,
+  } = useSandboxCamera({
+    containerRef,
+    minZoom: MIN_ZOOM,
+    maxZoom: MAX_ZOOM,
+  });
   const selectedCharge = useMemo(
     () => charges.find((charge) => charge.id === selectedChargeId) ?? null,
     [charges, selectedChargeId],
@@ -210,82 +154,8 @@ export function ElectricFieldSandbox() {
   }, [charges]);
 
   useEffect(() => {
-    cameraRef.current = { offsetX, offsetY };
-  }, [offsetX, offsetY]);
-
-  useEffect(() => {
-    zoomRef.current = zoom;
-  }, [zoom]);
-
-  useEffect(() => {
     modeRef.current = mode;
   }, [mode]);
-
-  useEffect(() => {
-    boundsRef.current = viewBounds;
-  }, [viewBounds]);
-
-  const clampZoom = useCallback(
-    (value: number) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, value)),
-    [],
-  );
-
-  const zoomAtClientPoint = useCallback(
-    (clientX: number, clientY: number, desiredZoom: number) => {
-      const element = containerRef.current;
-      if (!element) {
-        return;
-      }
-      const rect = element.getBoundingClientRect();
-      if (!rect.width || !rect.height) {
-        return;
-      }
-
-      const boundedZoom = clampZoom(desiredZoom);
-      const localX = clientX - rect.left;
-      const localY = clientY - rect.top;
-      const worldBefore = screenToWorld(
-        { x: localX, y: localY },
-        boundsRef.current,
-        rect.width,
-        rect.height,
-      );
-
-      const spanX = (baseBounds.maxX - baseBounds.minX) / boundedZoom;
-      const spanY = (baseBounds.maxY - baseBounds.minY) / boundedZoom;
-      const normalizedX = localX / rect.width;
-      const normalizedY = (rect.height - localY) / rect.height;
-      const minX = worldBefore.x - normalizedX * spanX;
-      const minY = worldBefore.y - normalizedY * spanY;
-      const centerX = minX + spanX * 0.5;
-      const centerY = minY + spanY * 0.5;
-      const baseCenterX = (baseBounds.minX + baseBounds.maxX) * 0.5;
-      const baseCenterY = (baseBounds.minY + baseBounds.maxY) * 0.5;
-
-      zoomRef.current = boundedZoom;
-      setZoom(boundedZoom);
-      setOffsetX(centerX - baseCenterX);
-      setOffsetY(centerY - baseCenterY);
-    },
-    [baseBounds, clampZoom],
-  );
-
-  const getWorldFromClientPoint = useCallback((clientX: number, clientY: number) => {
-    const element = containerRef.current;
-    if (!element) {
-      return null;
-    }
-    const rect = element.getBoundingClientRect();
-    if (!rect.width || !rect.height) {
-      return null;
-    }
-    return screenToWorld(
-      { x: clientX - rect.left, y: clientY - rect.top },
-      boundsRef.current,
-      rect.width,
-      rect.height,
-    );
-  }, []);
 
   // Charge dragging is handled as its own interaction subsystem so pointermove
   // events can be batched before committing charge-position state.
@@ -330,28 +200,6 @@ export function ElectricFieldSandbox() {
     [charges, probePosition],
   );
 
-  const zoomByFactor = useCallback(
-    (factor: number) => {
-      const element = containerRef.current;
-      if (!element) {
-        return;
-      }
-      const rect = element.getBoundingClientRect();
-      zoomAtClientPoint(
-        rect.left + rect.width * 0.5,
-        rect.top + rect.height * 0.5,
-        zoom * factor,
-      );
-    },
-    [zoom, zoomAtClientPoint],
-  );
-
-  const resetView = useCallback(() => {
-    setZoom(1);
-    setOffsetX(0);
-    setOffsetY(0);
-  }, []);
-
   const removeSelectedCharge = useCallback(() => {
     if (!selectedChargeId) {
       return;
@@ -364,21 +212,13 @@ export function ElectricFieldSandbox() {
 
   useEffect(() => {
     const onPointerMove = (event: PointerEvent) => {
-      if (!panStateRef.current && !isDraggingCharge && !hasActiveSlingshot) {
-        const wantsRightPan = (event.buttons & 2) === 2;
-        const wantsSpacePan =
-          isSpacePressedRef.current && (event.buttons & 1) === 1;
-        if (wantsRightPan || wantsSpacePan) {
-          panStateRef.current = {
-            startX: event.clientX,
-            startY: event.clientY,
-            startOffsetX: cameraRef.current.offsetX,
-            startOffsetY: cameraRef.current.offsetY,
-          };
-        }
-      }
+      maybeStartImplicitPan(
+        event,
+        !isDraggingCharge && !hasActiveSlingshot,
+        isSpacePressedRef.current,
+      );
 
-      if (panFromClientDelta(event.clientX, event.clientY)) {
+      if (handlePanPointerMove(event)) {
         return;
       }
 
@@ -406,7 +246,7 @@ export function ElectricFieldSandbox() {
     const onPointerUp = () => {
       handleSlingshotPointerUp();
       handleChargeDragPointerUp();
-      panStateRef.current = null;
+      endPan();
       probeDragRef.current = false;
     };
 
@@ -420,11 +260,13 @@ export function ElectricFieldSandbox() {
     getWorldFromClientPoint,
     handleChargeDragPointerMove,
     handleChargeDragPointerUp,
+    handlePanPointerMove,
     handleSlingshotPointerMove,
     handleSlingshotPointerUp,
     hasActiveSlingshot,
     isDraggingCharge,
-    panFromClientDelta,
+    maybeStartImplicitPan,
+    endPan,
   ]);
 
   useEffect(() => {
@@ -472,12 +314,7 @@ export function ElectricFieldSandbox() {
     if (shouldPan) {
       event.preventDefault();
       setSelectedChargeId(null);
-      panStateRef.current = {
-        startX: event.clientX,
-        startY: event.clientY,
-        startOffsetX: offsetX,
-        startOffsetY: offsetY,
-      };
+      beginPan(event.clientX, event.clientY);
       event.currentTarget.setPointerCapture(event.pointerId);
       return;
     }
@@ -505,12 +342,7 @@ export function ElectricFieldSandbox() {
 
   const handleCanvasWheel = (event: ReactWheelEvent<HTMLDivElement>) => {
     event.preventDefault();
-    const zoomFactor = Math.exp(-event.deltaY * 0.0015);
-    zoomAtClientPoint(
-      event.clientX,
-      event.clientY,
-      zoomRef.current * zoomFactor,
-    );
+    handleWheelZoom(event.clientX, event.clientY, event.deltaY);
   };
 
   const probeScreen = worldToScreen(
@@ -932,12 +764,8 @@ export function ElectricFieldSandbox() {
         ref={containerRef}
         onPointerDownCapture={handleCanvasPointerDownCapture}
         onPointerDown={handleCanvasPointerDown}
-        onPointerUp={() => {
-          panStateRef.current = null;
-        }}
-        onPointerCancel={() => {
-          panStateRef.current = null;
-        }}
+        onPointerUp={endPan}
+        onPointerCancel={endPan}
         onWheel={handleCanvasWheel}
         onContextMenu={(event) => event.preventDefault()}
         className="relative h-full w-full overflow-hidden"
