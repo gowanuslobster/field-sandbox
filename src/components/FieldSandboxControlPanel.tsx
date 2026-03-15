@@ -11,6 +11,12 @@ type InteractionMode =
   | "add_negative"
   | "drop_test_charge";
 
+export type ChargePresetKey =
+  | "single_positive"
+  | "single_negative"
+  | "dipole"
+  | "quadrupole";
+
 type FieldSandboxControlPanelProps = {
   mode: InteractionMode;
   selectedCharge: Charge | null;
@@ -27,6 +33,7 @@ type FieldSandboxControlPanelProps = {
   testParticleCount: number;
   isParticleMotionPaused: boolean;
   onInteractionModeChange: (mode: InteractionMode) => void;
+  onChargePresetApply: (preset: ChargePresetKey) => void;
   onRemoveSelectedCharge: () => void;
   onClearTestCharges: () => void;
   onSelectedChargeValueChange: (value: number) => void;
@@ -62,6 +69,7 @@ export function FieldSandboxControlPanel({
   testParticleCount,
   isParticleMotionPaused,
   onInteractionModeChange,
+  onChargePresetApply,
   onRemoveSelectedCharge,
   onClearTestCharges,
   onSelectedChargeValueChange,
@@ -146,6 +154,40 @@ export function FieldSandboxControlPanel({
           className="col-span-2 rounded-md bg-cyan-300/20 px-3 py-2 text-sm text-cyan-100 transition-colors duration-200 hover:bg-cyan-300/35"
         >
           Clear Test Charges
+        </button>
+      </div>
+
+      <p className="mt-4 text-[11px] font-medium uppercase tracking-[0.15em] text-zinc-400">
+        Charge Presets
+      </p>
+      <div className="mt-2 grid grid-cols-2 gap-2">
+        <button
+          type="button"
+          onClick={() => onChargePresetApply("single_positive")}
+          className="rounded-md bg-orange-400/20 px-3 py-2 text-sm text-orange-100 transition-colors duration-200 hover:bg-orange-400/35"
+        >
+          Single + Charge
+        </button>
+        <button
+          type="button"
+          onClick={() => onChargePresetApply("single_negative")}
+          className="rounded-md bg-cyan-400/20 px-3 py-2 text-sm text-cyan-100 transition-colors duration-200 hover:bg-cyan-400/35"
+        >
+          Single - Charge
+        </button>
+        <button
+          type="button"
+          onClick={() => onChargePresetApply("dipole")}
+          className="rounded-md bg-violet-400/20 px-3 py-2 text-sm text-violet-100 transition-colors duration-200 hover:bg-violet-400/35"
+        >
+          Dipole
+        </button>
+        <button
+          type="button"
+          onClick={() => onChargePresetApply("quadrupole")}
+          className="rounded-md bg-emerald-400/20 px-3 py-2 text-sm text-emerald-100 transition-colors duration-200 hover:bg-emerald-400/35"
+        >
+          Quadrupole
         </button>
       </div>
 

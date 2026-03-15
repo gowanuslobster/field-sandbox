@@ -10,7 +10,10 @@ import {
   useState,
 } from "react";
 import { FieldHeatmap } from "@/components/FieldHeatmap";
-import { FieldSandboxControlPanel } from "@/components/FieldSandboxControlPanel";
+import {
+  FieldSandboxControlPanel,
+  type ChargePresetKey,
+} from "@/components/FieldSandboxControlPanel";
 import { useChargeDragging } from "@/components/useChargeDragging";
 import { useCursorReadout } from "@/components/useCursorReadout";
 import { useSandboxCamera } from "@/components/useSandboxCamera";
@@ -46,6 +49,31 @@ const INITIAL_CHARGES: Charge[] = [
   { id: "q2", position: { x: 0.72, y: 0 }, value: -1 },
   { id: "q3", position: { x: 0, y: 0.62 }, value: 1 },
 ];
+
+function buildChargePreset(preset: ChargePresetKey): Charge[] {
+  switch (preset) {
+    case "single_positive":
+      return [
+        { id: nextChargeId(), position: { x: 0, y: 0 }, value: 1 },
+      ];
+    case "single_negative":
+      return [
+        { id: nextChargeId(), position: { x: 0, y: 0 }, value: -1 },
+      ];
+    case "dipole":
+      return [
+        { id: nextChargeId(), position: { x: -0.42, y: 0 }, value: 1 },
+        { id: nextChargeId(), position: { x: 0.42, y: 0 }, value: -1 },
+      ];
+    case "quadrupole":
+      return [
+        { id: nextChargeId(), position: { x: -0.42, y: 0.42 }, value: 1 },
+        { id: nextChargeId(), position: { x: 0.42, y: 0.42 }, value: -1 },
+        { id: nextChargeId(), position: { x: -0.42, y: -0.42 }, value: -1 },
+        { id: nextChargeId(), position: { x: 0.42, y: -0.42 }, value: 1 },
+      ];
+  }
+}
 
 function nextChargeId(): string {
   return `q-${Math.random().toString(36).slice(2, 10)}`;
@@ -224,6 +252,20 @@ export function ElectricFieldSandbox() {
     );
     setSelectedChargeId(null);
   }, [selectedChargeId]);
+
+  const clearTestParticles = useCallback(() => {
+    clearSlingshot();
+    particleClearRef.current?.();
+    setIsParticleMotionPaused(false);
+    setInteractionMode("select");
+  }, [clearSlingshot, setInteractionMode]);
+
+  const applyChargePreset = useCallback((preset: ChargePresetKey) => {
+    clearTestParticles();
+    setCharges(buildChargePreset(preset));
+    setSelectedChargeId(null);
+    resetView();
+  }, [clearTestParticles, resetView]);
 
   useEffect(() => {
     // Global pointer ownership is routed through the interaction hooks in a
@@ -470,13 +512,9 @@ export function ElectricFieldSandbox() {
         testParticleCount={testParticleCount}
         isParticleMotionPaused={isParticleMotionPaused}
         onInteractionModeChange={setInteractionMode}
+        onChargePresetApply={applyChargePreset}
         onRemoveSelectedCharge={removeSelectedCharge}
-        onClearTestCharges={() => {
-          clearSlingshot();
-          particleClearRef.current?.();
-          setIsParticleMotionPaused(false);
-          setInteractionMode("select");
-        }}
+        onClearTestCharges={clearTestParticles}
         onSelectedChargeValueChange={(nextValue) => {
           if (!selectedCharge) {
             return;
