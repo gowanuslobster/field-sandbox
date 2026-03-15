@@ -12,6 +12,9 @@ import {
 import { FieldHeatmap } from "@/components/FieldHeatmap";
 import { useChargeDragging } from "@/components/useChargeDragging";
 import {
+  useSlingshotInteraction,
+} from "@/components/useSlingshotInteraction";
+import {
   FieldLinesCanvas,
   type FieldLineRenderMode,
 } from "@/components/FieldLinesCanvas";
@@ -23,12 +26,7 @@ import {
 import { VectorFieldCanvas } from "@/components/VectorFieldCanvas";
 import { calculateFieldAt, potentialAtPoint } from "@/physics/electrostatics";
 import {
-  calculateGhostOrbitSuggestion,
-  DEFAULT_TEST_PARTICLE_CHARGE,
-  DEFAULT_TEST_PARTICLE_MASS,
-  type GhostOrbitSuggestion,
   isGhostOrbitMatch,
-  PARTICLE_PLUMMER_EPSILON,
 } from "@/physics/dynamics";
 import type { Charge, WorldBounds } from "@/physics/types";
 import type { Vector2Like } from "@/physics/vector2d";
@@ -39,21 +37,6 @@ import {
 } from "@/physics/world-space";
 
 type Mode = "select" | "add_positive" | "add_negative" | "drop_test_charge";
-type SlingshotPreview = {
-  particleId: string | null;
-  origin: Vector2Like;
-  cursor: Vector2Like;
-  plannedVelocity: Vector2Like;
-  ghostSuggestion: GhostOrbitSuggestion | null;
-  ghostAnchor: Vector2Like;
-};
-type SlingshotSession = {
-  particleId: string | null;
-  origin: Vector2Like;
-  spawnOnRelease: boolean;
-  ghostSuggestion: GhostOrbitSuggestion | null;
-  ghostAnchor: Vector2Like;
-};
 
 const CHARGE_RADIUS_PX = 13;
 const MIN_ZOOM = 0.1;
@@ -94,23 +77,11 @@ function toChargeClass(value: number, selected: boolean): string {
 
 export function ElectricFieldSandbox() {
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const slingshotRef = useRef<SlingshotSession | null>(null);
-  const slingshotPreviewRef = useRef<SlingshotPreview | null>(null);
   const probeDragRef = useRef(false);
   const particleSpawnerRef = useRef<
     ((position: Vector2Like) => { id: string; pos: Vector2Like; vel: Vector2Like }) | null
   >(null);
   const particleClearRef = useRef<(() => void) | null>(null);
-  const particlePickRef = useRef<
-    ((worldPosition: Vector2Like, radiusWorld: number) => {
-      id: string;
-      pos: Vector2Like;
-      vel: Vector2Like;
-    } | null) | null
-  >(null);
-  const particleFreezeRef = useRef<((id: string, frozen: boolean) => void) | null>(
-    null,
-  );
   const particleLaunchRef = useRef<
     ((id: string, velocity: Vector2Like) => void) | null
   >(null);
@@ -154,8 +125,6 @@ export function ElectricFieldSandbox() {
     x: -0.18,
     y: 0.18,
   });
-  const [slingshotPreview, setSlingshotPreview] =
-    useState<SlingshotPreview | null>(null);
   const setInteractionMode = useCallback((nextMode: Mode) => {
     modeRef.current = nextMode;
     setMode(nextMode);
@@ -164,8 +133,6 @@ export function ElectricFieldSandbox() {
     (controller: ParticlesController | null) => {
       particleSpawnerRef.current = controller?.spawn ?? null;
       particleClearRef.current = controller?.clear ?? null;
-      particlePickRef.current = controller?.pickAt ?? null;
-      particleFreezeRef.current = controller?.setFrozen ?? null;
       particleLaunchRef.current = controller?.launch ?? null;
     },
     [],
@@ -333,6 +300,22 @@ export function ElectricFieldSandbox() {
     setSelectedChargeId,
     setInteractionMode,
   });
+  // Slingshot interaction now only applies at particle creation time.
+  const {
+    hasActiveSlingshot,
+    slingshotPreview,
+    initializeDropSlingshot,
+    handleGlobalPointerMove: handleSlingshotPointerMove,
+    handleGlobalPointerUp: handleSlingshotPointerUp,
+    clearSlingshot,
+  } = useSlingshotInteraction({
+    getWorldFromClientPoint,
+    chargesRef,
+    modeRef,
+    particleSpawnerRef,
+    particleLaunchRef,
+    dragToVelocityScale: SLINGSHOT_DRAG_TO_VELOCITY,
+  });
 
   const isSimulating =
     isDraggingCharge ||
@@ -381,7 +364,7 @@ export function ElectricFieldSandbox() {
 
   useEffect(() => {
     const onPointerMove = (event: PointerEvent) => {
-      if (!panStateRef.current && !isDraggingCharge && !slingshotRef.current) {
+      if (!panStateRef.current && !isDraggingCharge && !hasActiveSlingshot) {
         const wantsRightPan = (event.buttons & 2) === 2;
         const wantsSpacePan =
           isSpacePressedRef.current && (event.buttons & 1) === 1;
@@ -403,38 +386,12 @@ export function ElectricFieldSandbox() {
         return;
       }
 
-      const world = getWorldFromClientPoint(event.clientX, event.clientY);
-      if (!world) {
+      if (handleSlingshotPointerMove(event)) {
         return;
       }
 
-      if (slingshotRef.current) {
-        const session = slingshotRef.current;
-        const origin = session.origin;
-        const dragVector = {
-          x: world.x - origin.x,
-          y: world.y - origin.y,
-        };
-        const plannedVelocity = {
-          x: dragVector.x * SLINGSHOT_DRAG_TO_VELOCITY,
-          y: dragVector.y * SLINGSHOT_DRAG_TO_VELOCITY,
-        };
-        setSlingshotPreview({
-          particleId: session.particleId,
-          origin,
-          cursor: world,
-          plannedVelocity,
-          ghostSuggestion: session.ghostSuggestion,
-          ghostAnchor: session.ghostAnchor,
-        });
-        slingshotPreviewRef.current = {
-          particleId: session.particleId,
-          origin,
-          cursor: world,
-          plannedVelocity,
-          ghostSuggestion: session.ghostSuggestion,
-          ghostAnchor: session.ghostAnchor,
-        };
+      const world = getWorldFromClientPoint(event.clientX, event.clientY);
+      if (!world) {
         return;
       }
 
@@ -447,28 +404,7 @@ export function ElectricFieldSandbox() {
     };
 
     const onPointerUp = () => {
-      if (slingshotRef.current) {
-        const session = slingshotRef.current;
-        const plannedVelocity = slingshotPreviewRef.current?.plannedVelocity ?? {
-          x: 0,
-          y: 0,
-        };
-        if (session.spawnOnRelease) {
-          const spawned = particleSpawnerRef.current?.(session.origin);
-          if (spawned) {
-            particleLaunchRef.current?.(spawned.id, plannedVelocity);
-          }
-        } else if (session.particleId) {
-          if (slingshotPreviewRef.current) {
-            particleLaunchRef.current?.(session.particleId, plannedVelocity);
-          } else {
-            particleFreezeRef.current?.(session.particleId, false);
-          }
-        }
-        slingshotRef.current = null;
-        setSlingshotPreview(null);
-        slingshotPreviewRef.current = null;
-      }
+      handleSlingshotPointerUp();
       handleChargeDragPointerUp();
       panStateRef.current = null;
       probeDragRef.current = false;
@@ -484,6 +420,9 @@ export function ElectricFieldSandbox() {
     getWorldFromClientPoint,
     handleChargeDragPointerMove,
     handleChargeDragPointerUp,
+    handleSlingshotPointerMove,
+    handleSlingshotPointerUp,
+    hasActiveSlingshot,
     isDraggingCharge,
     panFromClientDelta,
   ]);
@@ -517,109 +456,10 @@ export function ElectricFieldSandbox() {
     };
   }, [removeSelectedCharge]);
 
-  const initializeDropSlingshot = useCallback(
-    (clientX: number, clientY: number) => {
-      const world = getWorldFromClientPoint(clientX, clientY);
-      if (!world) {
-        return;
-      }
-      const initialGhostSuggestion =
-        modeRef.current === "drop_test_charge"
-          ? calculateGhostOrbitSuggestion(
-              world,
-              { x: 0, y: 0 },
-              chargesRef.current,
-              DEFAULT_TEST_PARTICLE_CHARGE,
-              DEFAULT_TEST_PARTICLE_MASS,
-              { softening: PARTICLE_PLUMMER_EPSILON, interactionMode: "electric" },
-            )
-          : null;
-
-      const worldPerPixel =
-        (viewBounds.maxX - viewBounds.minX) / Math.max(size.width, 1);
-      const hit = particlePickRef.current?.(world, worldPerPixel * 60);
-      if (hit) {
-        slingshotRef.current = {
-          particleId: hit.id,
-          origin: hit.pos,
-          spawnOnRelease: false,
-          ghostSuggestion: initialGhostSuggestion,
-          ghostAnchor: world,
-        };
-        particleFreezeRef.current?.(hit.id, true);
-        const preview: SlingshotPreview = {
-          particleId: hit.id,
-          origin: hit.pos,
-          cursor: world,
-          plannedVelocity: { x: 0, y: 0 },
-          ghostSuggestion: initialGhostSuggestion,
-          ghostAnchor: world,
-        };
-        slingshotPreviewRef.current = preview;
-        setSlingshotPreview(preview);
-        return;
-      }
-
-      slingshotRef.current = {
-        particleId: null,
-        origin: world,
-        spawnOnRelease: true,
-        ghostSuggestion: initialGhostSuggestion,
-        ghostAnchor: world,
-      };
-      const preview: SlingshotPreview = {
-        particleId: null,
-        origin: world,
-        cursor: world,
-        plannedVelocity: { x: 0, y: 0 },
-        ghostSuggestion: initialGhostSuggestion,
-        ghostAnchor: world,
-      };
-      slingshotPreviewRef.current = preview;
-      setSlingshotPreview(preview);
-    },
-    [getWorldFromClientPoint, size.width, viewBounds.maxX, viewBounds.minX],
-  );
-
   const handleCanvasPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
     const interactionMode = modeRef.current;
-    if (
-      event.button === 0 &&
-      interactionMode === "select"
-    ) {
-      const world = getWorldFromClientPoint(event.clientX, event.clientY);
-      if (world) {
-        const worldPerPixel =
-          (viewBounds.maxX - viewBounds.minX) / Math.max(size.width, 1);
-        const hit = particlePickRef.current?.(world, worldPerPixel * 60);
-        if (hit) {
-          event.preventDefault();
-          event.stopPropagation();
-          slingshotRef.current = {
-            particleId: hit.id,
-            origin: hit.pos,
-            spawnOnRelease: false,
-            ghostSuggestion: null,
-            ghostAnchor: world,
-          };
-          particleFreezeRef.current?.(hit.id, true);
-          const preview: SlingshotPreview = {
-            particleId: hit.id,
-            origin: hit.pos,
-            cursor: world,
-            plannedVelocity: { x: 0, y: 0 },
-            ghostSuggestion: null,
-            ghostAnchor: world,
-          };
-          slingshotPreviewRef.current = preview;
-          setSlingshotPreview(preview);
-          return;
-        }
-      }
-    }
-
     if (interactionMode === "drop_test_charge" && event.button === 0) {
-      if (!slingshotRef.current) {
+      if (!hasActiveSlingshot) {
         initializeDropSlingshot(event.clientX, event.clientY);
       }
       return;
@@ -782,12 +622,12 @@ export function ElectricFieldSandbox() {
       if (event.button !== 0 || modeRef.current !== "drop_test_charge") {
         return;
       }
-      if (slingshotRef.current) {
+      if (hasActiveSlingshot) {
         return;
       }
       initializeDropSlingshot(event.clientX, event.clientY);
     },
-    [initializeDropSlingshot],
+    [hasActiveSlingshot, initializeDropSlingshot],
   );
 
   return (
@@ -856,9 +696,7 @@ export function ElectricFieldSandbox() {
           <button
             type="button"
             onClick={() => {
-              slingshotRef.current = null;
-              slingshotPreviewRef.current = null;
-              setSlingshotPreview(null);
+              clearSlingshot();
               particleClearRef.current?.();
               setInteractionMode("select");
             }}

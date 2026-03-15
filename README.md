@@ -26,7 +26,6 @@ Open the app, place charges, drag them around, launch test particles, and use th
 
 ### Launch and study test charges
 - Use `Drop Test Charge` to place a particle and slingshot it with an initial velocity.
-- Re-grab an existing test particle and relaunch it.
 - Watch particle trails over time.
 - Monitor the live energy HUD for total, kinetic, and potential energy.
 - Use the Ghost Orbit guide to estimate a circular-orbit launch near an attractive source.

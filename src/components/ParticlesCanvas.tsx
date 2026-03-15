@@ -23,18 +23,11 @@ type SpawnParticle = (
   position: Vector2Like,
 ) => { id: string; pos: Vector2Like; vel: Vector2Like };
 type ClearParticles = () => void;
-type PickParticle = (
-  worldPosition: Vector2Like,
-  radiusWorld: number,
-) => { id: string; pos: Vector2Like; vel: Vector2Like } | null;
-type SetParticleFrozen = (id: string, frozen: boolean) => void;
 type LaunchParticle = (id: string, velocity: Vector2Like) => void;
 
 export type ParticlesController = {
   spawn: SpawnParticle;
   clear: ClearParticles;
-  pickAt: PickParticle;
-  setFrozen: SetParticleFrozen;
   launch: LaunchParticle;
 };
 export type ParticleEnergySnapshot = {
@@ -206,56 +199,6 @@ export function ParticlesCanvas({
     requestRenderRef.current?.();
   }, [emitEnergySnapshot, emitParticleCount]);
 
-  const pickAt = useCallback<PickParticle>((worldPosition, radiusWorld) => {
-    const radiusSquared = radiusWorld * radiusWorld;
-    let bestMatch: {
-      id: string;
-      pos: Vector2Like;
-      vel: Vector2Like;
-      distanceSquared: number;
-    } | null = null;
-    for (let index = particlesRef.current.length - 1; index >= 0; index -= 1) {
-      const state = particlesRef.current[index];
-      const dx = state.particle.pos.x - worldPosition.x;
-      const dy = state.particle.pos.y - worldPosition.y;
-      const distanceSquared = dx * dx + dy * dy;
-      if (
-        distanceSquared <= radiusSquared &&
-        (!bestMatch || distanceSquared < bestMatch.distanceSquared)
-      ) {
-        bestMatch = {
-          id: state.id,
-          pos: state.particle.pos,
-          vel: state.particle.vel,
-          distanceSquared,
-        };
-      }
-    }
-    if (!bestMatch) {
-      return null;
-    }
-    return {
-      id: bestMatch.id,
-      pos: bestMatch.pos,
-      vel: bestMatch.vel,
-    };
-  }, []);
-
-  const setFrozen = useCallback<SetParticleFrozen>((id, frozen) => {
-    particlesRef.current = particlesRef.current.map((state) =>
-      state.id === id
-        ? {
-            ...state,
-            frozen,
-            unfreezeAtMs: frozen ? null : state.unfreezeAtMs,
-          }
-        : state,
-    );
-    needsRenderRef.current = true;
-    requestRenderRef.current?.();
-    emitEnergySnapshot();
-  }, [emitEnergySnapshot]);
-
   const launchParticle = useCallback<LaunchParticle>((id, velocity) => {
     particlesRef.current = particlesRef.current.map((state) => {
       if (state.id !== id) {
@@ -286,8 +229,6 @@ export function ParticlesCanvas({
     onControllerReady?.({
       spawn: spawnParticle,
       clear: clearParticles,
-      pickAt,
-      setFrozen,
       launch: launchParticle,
     });
     return () => onControllerReady?.(null);
@@ -295,8 +236,6 @@ export function ParticlesCanvas({
     clearParticles,
     launchParticle,
     onControllerReady,
-    pickAt,
-    setFrozen,
     spawnParticle,
   ]);
 
