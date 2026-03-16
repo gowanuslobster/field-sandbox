@@ -15,7 +15,8 @@ export type ChargePresetKey =
   | "single_positive"
   | "single_negative"
   | "dipole"
-  | "quadrupole";
+  | "quadrupole"
+  | "random";
 
 type FieldSandboxControlPanelProps = {
   mode: InteractionMode;
@@ -34,6 +35,7 @@ type FieldSandboxControlPanelProps = {
   isParticleMotionPaused: boolean;
   onInteractionModeChange: (mode: InteractionMode) => void;
   onChargePresetApply: (preset: ChargePresetKey) => void;
+  onClearScreen: () => void;
   onRemoveSelectedCharge: () => void;
   onClearTestCharges: () => void;
   onSelectedChargeValueChange: (value: number) => void;
@@ -70,6 +72,7 @@ export function FieldSandboxControlPanel({
   isParticleMotionPaused,
   onInteractionModeChange,
   onChargePresetApply,
+  onClearScreen,
   onRemoveSelectedCharge,
   onClearTestCharges,
   onSelectedChargeValueChange,
@@ -140,18 +143,18 @@ export function FieldSandboxControlPanel({
         <button
           type="button"
           onClick={() => onInteractionModeChange("drop_test_charge")}
-          className={`col-span-2 rounded-md px-3 py-2 text-sm transition-all duration-200 ${
+          className={`rounded-md px-2 py-2 text-[13px] transition-all duration-200 ${
             mode === "drop_test_charge"
               ? "bg-amber-200 text-black shadow-[0_0_20px_rgba(255,226,153,0.42)]"
               : "bg-amber-300/20 text-amber-100 hover:bg-amber-300/35"
           }`}
         >
-          + Drop Test Charge
+          Drop Test Charge
         </button>
         <button
           type="button"
           onClick={onClearTestCharges}
-          className="col-span-2 rounded-md bg-cyan-300/20 px-3 py-2 text-sm text-cyan-100 transition-colors duration-200 hover:bg-cyan-300/35"
+          className="rounded-md bg-cyan-300/20 px-2 py-2 text-[13px] text-cyan-100 transition-colors duration-200 hover:bg-cyan-300/35"
         >
           Clear Test Charges
         </button>
@@ -161,6 +164,20 @@ export function FieldSandboxControlPanel({
         Charge Presets
       </p>
       <div className="mt-2 grid grid-cols-2 gap-2">
+        <button
+          type="button"
+          onClick={() => onChargePresetApply("random")}
+          className="rounded-md bg-fuchsia-400/20 px-3 py-2 text-sm text-fuchsia-100 transition-colors duration-200 hover:bg-fuchsia-400/35"
+        >
+          Random
+        </button>
+        <button
+          type="button"
+          onClick={onClearScreen}
+          className="rounded-md bg-zinc-200/12 px-3 py-2 text-sm text-zinc-100 transition-colors duration-200 hover:bg-zinc-200/22"
+        >
+          Clear Screen
+        </button>
         <button
           type="button"
           onClick={() => onChargePresetApply("single_positive")}
@@ -217,6 +234,9 @@ export function FieldSandboxControlPanel({
         </div>
       ) : null}
 
+      <p className="mt-4 text-[11px] font-medium uppercase tracking-[0.15em] text-zinc-400">
+        Zoom Controls
+      </p>
       <div className="mt-2 grid grid-cols-3 gap-2">
         <button
           type="button"
@@ -272,6 +292,18 @@ export function FieldSandboxControlPanel({
         </button>
         <button
           type="button"
+          onClick={onShowVectorGridChange}
+          className={`flex w-full items-center justify-between rounded-md px-3 py-2 text-sm transition-all duration-200 ${
+            showVectorGrid
+              ? "bg-fuchsia-300/85 text-black shadow-[0_0_14px_rgba(232,121,249,0.45)]"
+              : "bg-fuchsia-400/20 text-fuchsia-100 hover:bg-fuchsia-400/35"
+          }`}
+        >
+          <span>Show Field Vector Grid</span>
+          <span className="text-xs font-semibold">{showVectorGrid ? "ON" : "OFF"}</span>
+        </button>
+        <button
+          type="button"
           onClick={onShowHeatmapChange}
           className={`flex w-full items-center justify-between rounded-md px-3 py-2 text-sm transition-all duration-200 ${
             showHeatmap
@@ -310,36 +342,26 @@ export function FieldSandboxControlPanel({
             {showEquipotentialLines ? "ON" : "OFF"}
           </span>
         </button>
-        <div className="rounded-lg border border-sky-200/20 bg-sky-950/20 px-3 py-2">
-          <div className="flex items-center justify-between text-xs text-sky-100">
-            <span>Contour Density</span>
-            <span className="font-semibold">{contourDensity.toFixed(1)}x</span>
+        {showEquipotentialLines ? (
+          <div className="rounded-lg border border-sky-200/20 bg-sky-950/20 px-3 py-2">
+            <div className="flex items-center justify-between text-xs text-sky-100">
+              <span>Contour Density</span>
+              <span className="font-semibold">{contourDensity.toFixed(1)}x</span>
+            </div>
+            <input
+              type="range"
+              min={0.6}
+              max={3.4}
+              step={0.1}
+              value={contourDensity}
+              onChange={(event) =>
+                onContourDensityChange(Number.parseFloat(event.currentTarget.value))
+              }
+              className="mt-2 w-full accent-sky-300"
+              aria-label="Contour Density slider"
+            />
           </div>
-          <input
-            type="range"
-            min={0.6}
-            max={3.4}
-            step={0.1}
-            value={contourDensity}
-            onChange={(event) =>
-              onContourDensityChange(Number.parseFloat(event.currentTarget.value))
-            }
-            className="mt-2 w-full accent-sky-300"
-            aria-label="Contour Density slider"
-          />
-        </div>
-        <button
-          type="button"
-          onClick={onShowVectorGridChange}
-          className={`flex w-full items-center justify-between rounded-md px-3 py-2 text-sm transition-all duration-200 ${
-            showVectorGrid
-              ? "bg-fuchsia-300/85 text-black shadow-[0_0_14px_rgba(232,121,249,0.45)]"
-              : "bg-fuchsia-400/20 text-fuchsia-100 hover:bg-fuchsia-400/35"
-          }`}
-        >
-          <span>Show Vector Grid</span>
-          <span className="text-xs font-semibold">{showVectorGrid ? "ON" : "OFF"}</span>
-        </button>
+        ) : null}
       </div>
 
       <div className="mt-4 rounded-lg border border-cyan-200/20 bg-cyan-950/20 px-3 py-2 text-xs">

@@ -43,12 +43,35 @@ const CHARGE_RADIUS_PX = 13;
 const MIN_ZOOM = 0.1;
 const MAX_ZOOM = 6.5;
 const SLINGSHOT_DRAG_TO_VELOCITY = 4.8;
+const INITIAL_CHARGES: Charge[] = [];
 
-const INITIAL_CHARGES: Charge[] = [
-  { id: "q1", position: { x: -0.72, y: 0 }, value: 1 },
-  { id: "q2", position: { x: 0.72, y: 0 }, value: -1 },
-  { id: "q3", position: { x: 0, y: 0.62 }, value: 1 },
-];
+function randomGaussian(): number {
+  const u1 = Math.max(Math.random(), 1e-8);
+  const u2 = Math.random();
+  return Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+function buildRandomPreset(): Charge[] {
+  const count = 3 + Math.floor(Math.random() * 3);
+  const charges: Charge[] = [];
+
+  for (let index = 0; index < count; index += 1) {
+    charges.push({
+      id: nextChargeId(),
+      position: {
+        x: clamp(randomGaussian() * 0.46, -1.15, 1.15),
+        y: clamp(randomGaussian() * 0.38, -0.82, 0.82),
+      },
+      value: Math.random() < 0.5 ? -1 : 1,
+    });
+  }
+
+  return charges;
+}
 
 function buildChargePreset(preset: ChargePresetKey): Charge[] {
   switch (preset) {
@@ -72,6 +95,8 @@ function buildChargePreset(preset: ChargePresetKey): Charge[] {
         { id: nextChargeId(), position: { x: -0.42, y: -0.42 }, value: -1 },
         { id: nextChargeId(), position: { x: 0.42, y: -0.42 }, value: 1 },
       ];
+    case "random":
+      return buildRandomPreset();
   }
 }
 
@@ -259,6 +284,13 @@ export function ElectricFieldSandbox() {
     setIsParticleMotionPaused(false);
     setInteractionMode("select");
   }, [clearSlingshot, setInteractionMode]);
+
+  const clearScreen = useCallback(() => {
+    clearTestParticles();
+    setCharges([]);
+    setSelectedChargeId(null);
+    resetView();
+  }, [clearTestParticles, resetView]);
 
   const applyChargePreset = useCallback((preset: ChargePresetKey) => {
     clearTestParticles();
@@ -513,6 +545,7 @@ export function ElectricFieldSandbox() {
         isParticleMotionPaused={isParticleMotionPaused}
         onInteractionModeChange={setInteractionMode}
         onChargePresetApply={applyChargePreset}
+        onClearScreen={clearScreen}
         onRemoveSelectedCharge={removeSelectedCharge}
         onClearTestCharges={clearTestParticles}
         onSelectedChargeValueChange={(nextValue) => {
@@ -563,6 +596,45 @@ export function ElectricFieldSandbox() {
           backgroundSize: "100% 100%, 48px 48px, 48px 48px",
         }}
       >
+        {charges.length === 0 ? (
+          <div className="pointer-events-none absolute inset-0 flex items-center justify-center px-8">
+            <div className="max-w-2xl rounded-3xl border border-cyan-200/15 bg-black/55 px-8 py-7 text-center shadow-[0_0_36px_rgba(56,189,248,0.12)] backdrop-blur-md">
+              <p className="text-xs font-medium uppercase tracking-[0.22em] text-cyan-200/75">
+                Build Your Field
+              </p>
+              <h2 className="mt-3 text-3xl font-semibold text-white">
+                Place charges, move them, and watch test charges fly through the electric field.
+              </h2>
+              <p className="mt-4 text-sm leading-6 text-zinc-200/88">
+                Start by adding your own charges or choose one of the centered presets in the
+                control panel. Then turn on the heatmap, vector grid, field lines, and
+                equipotentials to compare different ways of seeing the same field.
+              </p>
+              <div className="mt-5 grid gap-3 text-left text-sm text-zinc-300/88 md:grid-cols-2">
+                <div className="rounded-2xl border border-white/8 bg-white/4 px-4 py-3">
+                  <p className="font-medium text-zinc-100">What this app shows</p>
+                  <p className="mt-1 leading-6">
+                    Electric field patterns from fixed source charges, plus the motion of test
+                    particles launched through that fixed field.
+                  </p>
+                </div>
+                <div className="rounded-2xl border border-white/8 bg-white/4 px-4 py-3">
+                  <p className="font-medium text-zinc-100">Important simplifications</p>
+                  <p className="mt-1 leading-6">
+                    No electromagnetic wave dynamics are modeled here. Only the electric field is
+                    shown, source charges stay fixed, and test particles do not modify the field as
+                    they move.
+                  </p>
+                </div>
+              </div>
+              <p className="mt-5 text-sm leading-6 text-zinc-300/88">
+                Good places to start: a single charge, a dipole, a quadrupole, or a random
+                configuration. Use the Energy Readout to pause particle motion and inspect the
+                motion more closely.
+              </p>
+            </div>
+          </div>
+        ) : null}
         {/* Each visualization layer renders independently from the same source
             charges and camera bounds so students can mix overlays freely. */}
         <FieldHeatmap

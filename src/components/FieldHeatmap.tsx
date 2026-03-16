@@ -53,7 +53,7 @@ void main() {
   }
 
   float intensity = 1.0 - exp(-abs(potential) * uPotentialScale);
-  float alpha = pow(intensity, 0.8) * uOpacity;
+  float alpha = pow(intensity, 1.28) * uOpacity;
 
   vec3 positive = vec3(1.0, 0.36, 0.17);
   vec3 negative = vec3(0.15, 0.68, 1.0);
@@ -372,7 +372,7 @@ export function FieldHeatmap({
       context.uniform1i(uniforms.chargeCount, activeCharges.length);
       context.uniform3fv(uniforms.charges, chargeData);
       context.uniform1f(uniforms.softening, 0.04);
-      context.uniform1f(uniforms.potentialScale, 0.6);
+      context.uniform1f(uniforms.potentialScale, 0.34);
       context.uniform1f(uniforms.contourInterval, contourIntervalRef.current);
       context.uniform1f(uniforms.contourOpacity, contourOpacityRef.current);
       opacityCurrentRef.current +=
